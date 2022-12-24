@@ -5,6 +5,13 @@
 ; Assemble with nasm: 
 ; nasm store.asm -o store.bin
 
+; Registers are output in turn to dummy IO addresses, intercepted by the validator 
+; program. End of the routine is indicated by a write to IO address 0xFD.
+
+; Since there is no direct 'MOV rm, flags' or 'MOV rm, ip' instruction, we push 
+; these  two registers to the stack and intercept memory writes to the dummy stack
+; space defined at 00000-00003.
+
 cpu	8086
 org	0h
 

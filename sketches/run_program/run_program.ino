@@ -16,23 +16,13 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 */
-
 #include "arduino8088.h"
 #include "opcodes.h"
 
-// ------------------ Write the program to execute here -----------------------
-const unsigned char CODE_SEGMENT[] = {
-  0xFE, 0x18
-};
+// ------------------------- User-provided state ------------------------------
 
-// If you would like to prefetch specific bytes during code execution,
-// include them in the program and then specify a CODE_LENGTH less than
-// CODE_SEGMENT.  This value is ignored if 0 or > sizeof CODE_SEGMENT.
-const size_t CODE_LENGTH = 0;
-// ----------------------------------------------------------------------------
-
-static Cpu CPU;
-
+// Define the initial register state to load here.
+// Reserved flags will be set for you.
 registers LOAD_REGISTERS = {
   0x1111, // AX
   0x2222, // BX
@@ -49,6 +39,14 @@ registers LOAD_REGISTERS = {
   0xAAAA, // SI
   0xBBBB, // DI
 };
+
+// Write the program to execute here, to start at the provided CS:IP.
+const unsigned char CODE_SEGMENT[] = {
+  0xFE, 0x18
+};
+// -----------------------End User-provided state -----------------------------
+
+static Cpu CPU;
 
 // Register load routine.
 static u8 LOAD_PROGRAM[] = {
@@ -77,22 +75,13 @@ size_t LOAD_AX = 0x37;
 size_t LOAD_IP = 0x3A;
 size_t LOAD_CS = 0x3C;
 
+// Register store routine.
 static const u8 STORE_PROGRAM[] = {
   0xE7, 0xFE, 0x89, 0xD8, 0xE7, 0xFE, 0x89, 0xC8, 0xE7, 0xFE, 0x89, 0xD0, 0xE7, 0xFE, 0x8C, 0xD0,
   0xE7, 0xFE, 0x89, 0xE0, 0xE7, 0xFE, 0xB8, 0x00, 0x00, 0x8E, 0xD0, 0xB8, 0x04, 0x00, 0x89, 0xC4,
   0x9C, 0xE8, 0x00, 0x00, 0x8C, 0xC8, 0xE7, 0xFE, 0x8C, 0xD8, 0xE7, 0xFE, 0x8C, 0xC0, 0xE7, 0xFE,
   0x89, 0xE8, 0xE7, 0xFE, 0x89, 0xF0, 0xE7, 0xFE, 0x89, 0xF8, 0xE7, 0xFE, 0xB0, 0xFF, 0xE6, 0xFD
 };
-
-/* Ver 2
-// Register readback routine.
-static const u8 STORE_PROGRAM[] = {
-  0xE7, 0xFE, 0x89, 0xD8, 0xE7, 0xFE, 0x89, 0xC8, 0xE7, 0xFE, 0x89, 0xD0, 0xE7, 0xFE, 0x8C, 0xD0,
-  0xE7, 0xFE, 0x89, 0xE0, 0xE7, 0xFE, 0xB8, 0x00, 0x00, 0x8E, 0xD0, 0xB8, 0x02, 0x00, 0x89, 0xC4,
-  0x9C, 0x8C, 0xC8, 0xE7, 0xFE, 0x8C, 0xD8, 0xE7, 0xFE, 0x8C, 0xC0, 0xE7, 0xFE, 0x89, 0xE8, 0xE7,
-  0xFE, 0x89, 0xF0, 0xE7, 0xFE, 0x89, 0xF8, 0xE7, 0xFE, 0xB0, 0xFF, 0xE6, 0xFF
-};
-*/
 
 /*
 static const unsigned char CODE_SEGMENT[] = {
@@ -119,12 +108,6 @@ static const unsigned char CODE_SEGMENT[] = {
 };
 */
 
-/*
-static const unsigned char CODE_SEGMENT[] = {
-  0xb8, 0x00, 0x00, 0x8e, 0xd0, 0x89, 0xc4, 0x9d, 0x8e, 0xd0, 0x8e, 0xd8, 0x8e, 0xc0, 0x89, 0xc4, 0x89, 0xc5, 0x89, 0xc6, 0x89, 0xc7
-};
-*/
-
 /* Prefetch 1
 static const unsigned char CODE_SEGMENT[] = {
   0x0C, 0x00, // OR 
@@ -137,8 +120,6 @@ static const unsigned char CODE_SEGMENT[] = {
   0x0A, 0x02, 0x01, 0x02
 };
 */
-
-
 
 void setup() {
   Serial.begin(BAUD_RATE);
@@ -292,30 +273,6 @@ void print_cpu_state() {
   }
 
   Serial.println("");
-}
-
-void clock_tick() {
-  SET_CLOCK_HIGH;
-  delayMicroseconds(CLOCK_PIN_HIGH_DELAY);
-  SET_CLOCK_LOW;
-  delayMicroseconds(CLOCK_PIN_LOW_DELAY);
-}
-
-void data_bus_write(unsigned char byte) {
-  // Set data bus pins 22-29 to OUTPUT
-  DDRA = 0xFF;
-  delayMicroseconds(PIN_CHANGE_DELAY);
-  // Write byte to data bus pins 22-29
-  PORTA = byte;
-  delayMicroseconds(PIN_CHANGE_DELAY);
-}
-
-unsigned char data_bus_read() {
-  // Set data bus pins 22-29 to INPUT
-  DDRA = 0;
-  delayMicroseconds(PIN_CHANGE_DELAY);
-  // Read byte from data bus pins 22-29
-  return PINA;
 }
 
 void change_state(machine_state new_state) {
@@ -701,42 +658,6 @@ void cycle() {
       #endif
       break;
   }
-}
-
-/*
-  Read the address pins and store the 20-bit value in global ADDRESS_LATCH.
-  Only valid while ALE is HIGH.
-*/
-void latch_address() {
-  /*
-  ADDRESS_LATCH = 0;
-  for( int a = 0; a < ADDRESS_LINES; a++ ) {
-    unsigned long b = digitalRead(ADDRESS_PINS[a]);
-    ADDRESS_LATCH |= b << a;
-  }*/
-
-  // Set data bus pins 22-29 to INPUT
-  DDRA = 0;
-  delayMicroseconds(PIN_CHANGE_DELAY); // Wait for pin state change before reading
-  CPU.address_latch = PINA; // Pins 22-29
-  CPU.address_latch |= (unsigned long)BIT_REVERSE_TABLE[PINC] << 8; // Pins 30-37 (Bit order reversed)
-  CPU.address_latch |= (unsigned long)(PIND & 0x80) << 9; // Pin 38
-  CPU.address_latch |= (unsigned long)(BIT_REVERSE_TABLE[PING] & 0xE0) << 12; // Pins 39-40 (Bit order reversed)
-  
-  //Serial.println(PIND, BIN);
-  //Serial.println(PING, BIN);
-}
-
-// Read the status lines S0-S5 as well as queue status lines QS0-QS1.
-void read_status0() {
-  CPU.status0 = (PINJ & BIT1) >> 1; // S0
-  CPU.status0 |= (PINJ & BIT0) << 1; // S1 
-  CPU.status0 |= ((PINH & BIT1) >> 1) << 2; // S2 - Pin 16 (H1)
-  CPU.status0 |= ((PIND & BIT7) >> 7) << 3; // S3 - Pin 38 (D7)
-  CPU.status0 |= ((PING & BIT2) >> 2) << 4; // S4 - Pin 39 (G2)
-  CPU.status0 |= ((PING & BIT1) >> 1) << 5; // S5 - Pin 40 (G1)
-  CPU.status0 |= ((PINH & BIT6) >> 6) << 6; // QS0 - Pin 9 (H6)
-  CPU.status0 |= ((PINH & BIT5) >> 5) << 7; // QS1 - Pin 8 (H5)
 }
 
 void print_addr(unsigned long addr) {

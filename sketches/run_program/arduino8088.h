@@ -243,19 +243,31 @@ const int READY_PIN = 6;
 const int TEST_PIN = 7;
 
 // ALE pin #50 status i in PINB bit #3.
-const int ALE_PIN = 50;
+#define ALE_PIN 50
 #define READ_ALE_PIN ((PINB & 0x08) != 0)
 
 // MRDC pin #51 is read by PINB bit #2
-const int MRDC_PIN = 51;
+#define MRDC_PIN 51
 #define READ_MRDC_PIN ((PINB & 0x04) != 0)
 
+// AMWC pin #52 is read by PINB bit #1
+#define AMWC_PIN 52
+#define READ_AMWC_PIN ((PINB & 0x04) != 0)
+
 // MWTC pin #53 is read by PINB bit #0
-const int MWTC_PIN = 53;
+#define MWTC_PIN 53
 #define READ_MWTC_PIN ((PINB & 0x01) != 0)
 
+// IORC pin #46 is read by PINL bit #3
+#define IORC_PIN 46
+#define READ_IORC_PIN ((PINL & 0x08) != 0)
+
+// AIOWC pin #48 is read by PINL bit #1
+#define AIOWC_PIN 48
+#define READ_AIOWC_PIN ((PINL & 0x02) != 0)
+
 // IOWC pin #47 is read by PINL bit #2
-const int IOWC_PIN = 47;
+#define IOWC_PIN 47
 #define READ_IOWC_PIN ((PINL & 0x04) != 0)
 
 // Address pins, used for slow address reading via digitalRead()
@@ -287,6 +299,14 @@ static const u8 BIT_REVERSE_TABLE[256] =
 
 // --------------------- Function declarations --------------------------------
 u32 calc_flat_address(u16 seg, u16 offset);
+
+void clock_tick();
+void data_bus_write(u8 byte);
+u8 data_bus_read();
+
+void latch_address();
+void read_status0();
+
 
 void init_queue();
 void push_queue(u8 byte, u8 dtype);
