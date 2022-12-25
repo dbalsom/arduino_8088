@@ -92,6 +92,18 @@ typedef enum {
   PASV = 7    // Passive
 } s_state;
 
+// Strings for printing bus states cycles.
+const char *BUS_STATE_STRINGS[] = {
+  "IRQA",
+  "IOR ",
+  "IOW ",
+  "HALT",
+  "CODE",
+  "MEMR",
+  "MEMW",
+  "PASV"
+};
+
 // Bus transfer cycles. Tw is wait state, inserted if READY is not asserted during T3.
 typedef enum { 
   t1 = 0,
@@ -101,9 +113,13 @@ typedef enum {
   tw = 4
 } t_cycle;
 
-// Strings for pretty-printing bus transfer cycles.
-static const char* CYCLE_STRINGS[] = {
+// Strings for printing bus transfer cycles.
+const char *CYCLE_STRINGS[] = {
   "t1", "t2", "t3", "t4", "tw"
+};
+
+const char *SEGMENT_STRINGS[] = {
+  "ES", "SS", "CS", "DS"
 };
 
 // CPU Registers
@@ -143,8 +159,8 @@ typedef struct queue {
 // 'F' = First byte fetched 
 // 'E' = Queue Emptied 
 // 'S' = Subsequent byte fetched
-static const char QUEUE_STATUS_CHARS[] = {
-  '.', 'F', 'E', 'S'
+const char QUEUE_STATUS_CHARS[] = {
+  ' ', 'F', 'E', 'S'
 };
 
 // Data bus data types. These are stored when pushing to the prefetch queue, so we know what 
@@ -252,7 +268,7 @@ const int TEST_PIN = 7;
 
 // AMWC pin #52 is read by PINB bit #1
 #define AMWC_PIN 52
-#define READ_AMWC_PIN ((PINB & 0x04) != 0)
+#define READ_AMWC_PIN ((PINB & 0x02) != 0)
 
 // MWTC pin #53 is read by PINB bit #0
 #define MWTC_PIN 53
@@ -291,7 +307,7 @@ unsigned long CYCLE_NUM = 0;
 // Bit reverse LUT from http://graphics.stanford.edu/~seander/bithacks.html#BitReverseTable
 static const u8 BIT_REVERSE_TABLE[256] = 
 {
-#   define R2(n)     n,     n + 2*64,     n + 1*64,     n + 3*64
+#   define R2(n)    n,     n + 2*64,     n + 1*64,     n + 3*64
 #   define R4(n) R2(n), R2(n + 2*16), R2(n + 1*16), R2(n + 3*16)
 #   define R6(n) R4(n), R4(n + 2*4 ), R4(n + 1*4 ), R4(n + 3*4 )
     R6(0), R6(2), R6(1), R6(3)

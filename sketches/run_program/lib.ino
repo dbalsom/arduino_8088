@@ -130,11 +130,26 @@ void print_queue() {
   u8 i;
   u8 byte;
   for(i = 0; i < CPU.queue.len; i++ ) {
-    byte = CPU.queue.queue[(CPU.queue.back + i) & 0x03];
+    byte = CPU.queue.queue[(CPU.queue.back + i) % QUEUE_MAX];
     sprintf(hex, "%02X", byte);
     strcat(buf, hex);
   }
   Serial.println(buf);
+}
+
+const char *queue_to_string() {
+  const size_t buf_len = (QUEUE_MAX * 2) + 1;
+  static char buf[buf_len];
+  char *buf_p = buf;
+  *buf_p = 0;
+  u8 byte;
+  for(u8 i = 0; i < CPU.queue.len; i++ ) {
+    byte = CPU.queue.queue[(CPU.queue.back + i) % QUEUE_MAX];
+    snprintf(buf_p, buf_len - (i * 2), "%02X", byte);
+    buf_p += 2;
+  }  
+
+  return buf;
 }
 
 void test_queue() {
@@ -157,6 +172,8 @@ void test_queue() {
 
 // ----------------------------------Opcodes-----------------------------------
 
+// Return the mnemonic name for the specified opcode. If the opcode is a group
+// opcode, op2 should be specified and modrm set to true.
 const char *get_opcode_str(u8 op1, u8 op2, bool modrm) {
 
   size_t op_idx = OPCODE_REFS[op1];

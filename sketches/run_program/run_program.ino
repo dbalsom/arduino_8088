@@ -139,9 +139,6 @@ void setup() {
   // Wait for CPU to initialize
   delayMicroseconds(100);
 
-  // Wait for serial port to be ready
-  while (!Serial);
-
   // Patch the reset vector jump
   patch_vector(JUMP_VECTOR, LOAD_SEG);
 
@@ -151,6 +148,9 @@ void setup() {
   // Enforce reserved bits in user-provided flags
   LOAD_REGISTERS.flags &= CPU_FLAG_DEFAULT_CLEAR;
   LOAD_REGISTERS.flags |= CPU_FLAG_DEFAULT_SET;
+
+  // Wait for serial port to be ready
+  while (!Serial);
 }
 
 void patch_vector(u8 *vec, u16 seg) {
@@ -221,40 +221,85 @@ void print_registers(registers *regs) {
 void print_cpu_state() {
   
   static char buf[81];
-  static char op_buf[9];
+  static char op_buf[7];
   static char q_buf[15];
   
-  char ale_chr = READ_ALE_PIN ? 'A' : 'a';
-  char rs_chr = !READ_MRDC_PIN ? 'R' : 'r';
-  char ws_chr = !READ_MWTC_PIN ? 'W' : 'w';
+  char *ale_str = READ_ALE_PIN ? "A:" : "  ";
+  
+  char rs_chr = !READ_MRDC_PIN ? 'R' : '.';
+  char aws_chr = !READ_AMWC_PIN ? 'A' : '.';
+  char ws_chr = !READ_MWTC_PIN ? 'W' : '.';
+  
+  char ior_chr = !READ_IORC_PIN ? 'R' : '.';
+  char aiow_chr = !READ_AIOWC_PIN ? 'A' : '.';
+  char iow_chr = !READ_IOWC_PIN ? 'W' : '.';
 
   char v_chr = MACHINE_STATE_CHARS[(size_t)CPU.v_state];
   u8 q = (CPU.status0 >> 6) & 0x03;
   char q_char = QUEUE_STATUS_CHARS[q];
   char s = CPU.status0 & 0x07;
 
-  char io_chr = !READ_IOWC_PIN ? 'I' : '.';
+  // Get segment from S3 & S4
+  char *seg_str = "  ";
+  if(CPU.bus_cycle != t1) {
+    // Status is not avaialble on T1 because address is latched
+    u8 seg = ((CPU.status0 & 0x18) >> 3) & 0x03;
+    seg_str = SEGMENT_STRINGS[(size_t)seg];
+  }
+
+  // Draw some sad ascii representation of bus states
+  char *st_str = "  ";
+  switch(CPU.bus_cycle) {
+      case t1:
+        
+        if((CPU.bus_state != PASV) && (CPU.bus_state != HALT) && (CPU.bus_state != IRQA)) {
+          // Begin a bus state
+          st_str = "\\ ";
+        }
+        break;
+      case t2: // FALLTHRU
+      case t3: // FALLTHRU
+      case tw:  
+        // Continue a bus state
+        st_str = " |";
+        break;
+      case t4:
+        // End a bus state
+        st_str = "/ ";
+        break;
+  }
+
+  // Make string for bus reads and writes
+  op_buf[0] = 0;
+  if(!READ_MRDC_PIN || !READ_IORC_PIN) {
+    snprintf(op_buf, 7, "<-r %02X", CPU.data_bus);
+  }
+  if(!READ_MWTC_PIN || !READ_IOWC_PIN) {
+    snprintf(op_buf, 7, "w-> %02X", CPU.data_bus);
+  }
+
+  const char *q_str = queue_to_string();
 
   snprintf(
     buf, 81, 
-    "%08ld %c %s [%05lX] %c%c%c %c %1X %c%d", 
+    "%08ld %c %s[%05lX] %2s M:%c%c%c I:%c%c%c %-4s %s %2s %6s | %c%d [%-8s]", 
     CYCLE_NUM, 
     v_chr, 
-    CYCLE_STRINGS[CPU.bus_cycle], 
+    ale_str,
     CPU.address_latch, 
-    ale_chr, rs_chr, ws_chr, io_chr, s, q_char, 
-    CPU.queue.len);
+    seg_str,
+    rs_chr, aws_chr, ws_chr,
+    ior_chr, aiow_chr, iow_chr,
+    BUS_STATE_STRINGS[(size_t)CPU.bus_state],
+    CYCLE_STRINGS[(size_t)CPU.bus_cycle], 
+    st_str,
+    op_buf,
+    q_char,
+    CPU.queue.len,
+    q_str
+  );
 
   Serial.print(buf);
-
-  if(!READ_MRDC_PIN) {
-    snprintf(op_buf, 9, " <-r %02X", CPU.data_bus);
-    Serial.print(op_buf);
-  }
-  if(!READ_MWTC_PIN) {
-    snprintf(op_buf, 9, " w-> %02X", CPU.data_bus);
-    Serial.print(op_buf);
-  }
 
   if(q == QUEUE_FIRST) {
     // First byte of opcode read from queue. Decode it to opcode
@@ -770,6 +815,4 @@ void loop() {
       print_registers(&CPU.post_regs);
     }
   }
-
-  
 }
