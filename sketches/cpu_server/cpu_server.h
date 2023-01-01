@@ -19,7 +19,7 @@
 #ifndef _CPU_SERVER_H
 #define _CPU_SERVER_H
 
-#define BAUD_RATE 230400
+#define BAUD_RATE 460800
 
 #define CMD_TIMEOUT 100 // Command timeout in milliseconds
 #define MAX_COMMAND_BYTES 28 // Maximum length of command parameter input

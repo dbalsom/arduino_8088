@@ -242,6 +242,20 @@ void test_queue() {
   print_queue();
 }
 
+// ----------------------------------Buzzer------------------------------------
+void beep(u32 time) {
+  pinMode(BUZZER_PIN, OUTPUT);
+  
+  digitalWrite(BUZZER_PIN, HIGH);
+  delay(time);
+  digitalWrite(BUZZER_PIN, LOW);
+  /*
+  BUZZER_ON;
+  delay(time);
+  BUZZER_OFF;
+  */
+}
+
 // ----------------------------------Opcodes-----------------------------------
 
 // Return the mnemonic name for the specified opcode. If the opcode is a group

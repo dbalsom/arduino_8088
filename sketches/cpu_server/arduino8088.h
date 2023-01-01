@@ -187,7 +187,7 @@ typedef struct cpu {
   machine_state v_state;
   u32 state_begin_time;
   u32 address_latch;
-  s_state cycle_state; // Cycle state is bus state latched on T1
+  s_state transfer_state; // Transfer state is bus state latched on T1
   s_state bus_state; // Bus state is current status of S0-S2 at given cycle (may not be valid)
   t_cycle bus_cycle;
   u8 data_bus;
@@ -246,6 +246,11 @@ const u16 CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 // Microseconds to wait after a pin direction change. Without some sort of delay
 // a subsequent read/write may fail.
 #define PIN_CHANGE_DELAY 4
+
+// -----------------------------Buzzer ----------------------------------------
+#define BUZZER_PIN 3
+#define BUZZER_ON PORTE |= BIT1
+#define BUZZER_OFF PORTE &= ~BIT1
 
 // ------------------------- CPU Control pins ---------------------------------
 

@@ -97,6 +97,36 @@ command_func V_TABLE[] = {
   &cmd_get_program_state
 };
 
+// Main Sketch setup routine
+void setup() {
+  Serial.begin(BAUD_RATE);
+
+  for( int p = 0; p < (sizeof OUTPUT_PINS / sizeof OUTPUT_PINS[0]); p++ ) {
+    pinMode(OUTPUT_PINS[p], OUTPUT);
+  }
+
+  for( int p = 0; p < (sizeof INPUT_PINS / sizeof INPUT_PINS[0]); p++ ) {
+    pinMode(INPUT_PINS[p], INPUT);
+  }
+
+  // Default output pin states
+  digitalWrite(READY_PIN, HIGH);
+  digitalWrite(TEST_PIN, LOW);
+  // Must set these to a known value or risk spurious interrupts!
+  digitalWrite(INTR_PIN, LOW);
+  digitalWrite(NMI_PIN, LOW);  
+
+  // Wait for CPU to initialize
+  delayMicroseconds(100);
+
+  // Patch the reset vector jump
+  patch_vector(JUMP_VECTOR, LOAD_SEG);
+
+  beep(100);
+  SERVER.c_state = WaitingForCommand;
+}
+
+// Send a failure code byte in reponse to a failed command
 void send_fail() {
   #if MODE_ASCII
     Serial.write(RESPONSE_CHRS[RESPONSE_FAIL]);
@@ -105,6 +135,7 @@ void send_fail() {
   #endif
 }
 
+// Send the success code byte in response to a succesful command
 void send_ok() {
   #if MODE_ASCII
     Serial.write(RESPONSE_CHRS[RESPONSE_OK]);
@@ -294,9 +325,13 @@ bool cmd_write_data_bus() {
 // Sets the data bus flag to DATA_PROGRAM_END, so that the Execute state can terminate
 // on the next instruction queue fetch
 bool cmd_finalize() {
-  CPU.data_bus = OPCODE_NOP;
-  CPU.data_type = DATA_PROGRAM_END;
-  return true;
+  if(CPU.v_state == Execute) {
+    change_state(ExecuteFinalize);
+    return true;
+  }
+  else {
+    return false;
+  }
 }
 
 // Server command - Store
@@ -306,13 +341,13 @@ bool cmd_finalize() {
 // Returns values of registers in the following order, little-endian
 // AX, BX, CX, DX, SS, SP, FLAGS, IP, CS, DS, ES, BP, SI, DI
 bool cmd_store(void) {
-  change_state(Store);
 
   // Command only valid in ExecuteDone state
   if(CPU.v_state != ExecuteDone) {
     return false;
   }
 
+  change_state(Store);
   while(CPU.v_state != Done) {
     // TODO: Add timeout in case of no state change?
     cycle();
@@ -392,36 +427,8 @@ bool cmd_read_pin(void) {
 
 // Server command - Get program state
 bool cmd_get_program_state(void) {
-  Serial.write((u8)SERVER.c_state);
+  Serial.write((u8)CPU.v_state);
   return true;
-}
-
-// Main Sketch setup routine
-void setup() {
-  Serial.begin(BAUD_RATE);
-
-  for( int p = 0; p < (sizeof OUTPUT_PINS / sizeof OUTPUT_PINS[0]); p++ ) {
-    pinMode(OUTPUT_PINS[p], OUTPUT);
-  }
-
-  for( int p = 0; p < (sizeof INPUT_PINS / sizeof INPUT_PINS[0]); p++ ) {
-    pinMode(INPUT_PINS[p], INPUT);
-  }
-
-  // Default output pin states
-  digitalWrite(READY_PIN, HIGH);
-  digitalWrite(TEST_PIN, LOW);
-  //digitalWrite(LOCK_PIN, HIGH);
-  digitalWrite(INTR_PIN, LOW);
-  digitalWrite(NMI_PIN, LOW);  
-
-  // Wait for CPU to initialize
-  delayMicroseconds(100);
-
-  // Patch the reset vector jump
-  patch_vector(JUMP_VECTOR, LOAD_SEG);
-
-  SERVER.c_state = WaitingForCommand;
 }
 
 void patch_vector(u8 *vec, u16 seg) {
@@ -644,7 +651,7 @@ void change_state(machine_state new_state) {
 void cycle() {
 
   clock_tick();
-
+  
   CYCLE_NUM++;
   if(CYCLE_NUM == 0) {
     // overflow
@@ -658,8 +665,8 @@ void cycle() {
         if(CPU.bus_state != PASV) {
           CPU.bus_cycle = t2;
         }
-        // Capture the state of the cycle in T1, as the state will go passive T3-T4
-        CPU.cycle_state = (s_state)(CPU.status0 & 0x07);    
+        // Capture the state of the transfer cycle in T1, as the state will go passive T3-T4
+        CPU.transfer_state = (s_state)(CPU.status0 & 0x07);    
         break;
 
       case t2:
@@ -673,7 +680,7 @@ void cycle() {
 
       case t4:
         // Did we complete a code fetch? If so, increment queue len
-        if(CPU.cycle_state == CODE) {
+        if(CPU.transfer_state == CODE) {
           if(CPU.queue.len < QUEUE_MAX) {
             push_queue(CPU.data_bus, CPU.data_type);
           }
@@ -689,7 +696,7 @@ void cycle() {
 
   read_status0();
   // bus_state is the instantaneous state per cycle. May not always be valid. 
-  // for state of the current bus cycle use cycle_state
+  // for state of the current bus transfer use transfer_state
   CPU.bus_state = (s_state)(CPU.status0 & 0x07);
 
   // Check QS0-QS1 queue status bits
@@ -832,6 +839,8 @@ void cycle() {
     // This is to support interception of memory reads & writes as instructions execute and to allow
     // the client to query CPU state as it wishes per cpu cycle.
     // When done in the Execute state, a cpu client should execute the ExecuteFinalize command.
+    // This is typically done when a CODE fetch occurs past the end of the provided program, although
+    // other end conditions are possible.
     case Execute:
     
       if(!READ_MRDC_PIN || !READ_IORC_PIN) {
@@ -858,11 +867,16 @@ void cycle() {
         if(CPU.bus_state == CODE) {
           // CPU is reading code byte, give it a flagged NOP
           CPU.data_bus = OPCODE_NOP;
-          CPU.data_type = DATA_PROGRAM_END;          
+          CPU.data_type = DATA_PROGRAM_END;
+          data_bus_write(CPU.data_bus);
         }
       }
 
-      if(CPU.q_ff & (CPU.qt == DATA_PROGRAM_END)) {
+      if(CPU.q_ff) {
+        beep(5);
+      }
+
+      if(CPU.q_ff && (CPU.qt == DATA_PROGRAM_END)) {
         // We read a flagged NOP, meaning the previous instruction has completed and it is safe to 
         // execute the Store routine.
         change_state(ExecuteDone);
@@ -880,7 +894,7 @@ void cycle() {
       if(!READ_MRDC_PIN) {
         // CPU is reading
         
-        if(CPU.bus_state == CODE) {    
+        if(CPU.bus_state == CODE) {
           // CPU is doing code fetch
           if(CPU.v_pc < sizeof STORE_PROGRAM) {
             // Read code byte from store program
