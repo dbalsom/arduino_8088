@@ -19,7 +19,11 @@
 #ifndef _ARDUINO8088_H
 #define _ARDUINO8088_H
 
-#define BAUD_RATE 230400
+#define BAUD_RATE 460800
+
+// Determines if the cycle count is reset to 0 on entering Execute state. Recommended as we 
+// dont usually care how long the setup program took
+#define RESET_CYCLE_NUMBER 1
 
 // Determines whether to jump to the specified load segment before executing the load program,
 // or just let the address lines roll over.
@@ -52,22 +56,23 @@ typedef enum {
   JumpVector,
   Load,
   LoadDone,
+  PrefetchSetup,
   Execute,
   Store,
   Done
 } machine_state;
 
-// These defines control debugging output for each state.
+// These defines control cycle status output for each state.
 #define TRACE_RESET 0
 #define TRACE_VECTOR 0
 #define TRACE_LOAD 0
+#define TRACE_PREFETCH 0
 #define TRACE_EXECUTE 1
 #define TRACE_STORE 0
 #define DEBUG_STORE 0
 
-
 static const char MACHINE_STATE_CHARS[] = {
-  'R', 'J', 'L', 'M', 'E', 'S', 'D'
+  'R', 'J', 'L', 'M', 'P', 'E', 'S', 'D'
 };
 
 static const char* MACHINE_STATE_STRINGS[] = {
@@ -75,6 +80,7 @@ static const char* MACHINE_STATE_STRINGS[] = {
   "JumpVector",
   "Load",
   "LoadDone",
+  "PrefetchSetup",
   "Execute",
   "Store",
   "Done"
@@ -117,6 +123,13 @@ typedef enum {
 const char *CYCLE_STRINGS[] = {
   "t1", "t2", "t3", "t4", "tw"
 };
+
+typedef enum {
+  SegES,
+  SegSS,
+  SegCS,
+  SegDS
+} segment;
 
 const char *SEGMENT_STRINGS[] = {
   "ES", "SS", "CS", "DS"
@@ -168,6 +181,7 @@ const char QUEUE_STATUS_CHARS[] = {
 // end when the first non-program byte is fetched as the first byte of an instruction.
 #define DATA_PROGRAM 0x00
 #define DATA_PROGRAM_END 0x01
+#define DATA_PREFETCH_PROGRAM 0x02
 
 typedef struct program_stats {
   u16 code_read_xfers;
@@ -181,6 +195,8 @@ typedef struct program_stats {
 
 // Main CPU State
 typedef struct cpu {
+
+  u8 prefetch_len;
   bool doing_reset;
   machine_state v_state;
   u32 state_begin_time;
@@ -194,6 +210,8 @@ typedef struct cpu {
   u8 command_bits; // 8288 command outputs
   u8 control_bits; // 8288 control outputs
   u16 v_pc; // Virtual program counter
+  u16 p_pc; // Virtual program counter for queue setup (prefetch) state
+  u8 p_popread_n; // Stack read count in prefetch state
   registers post_regs; // Register state retrieved from Store program
   u8 *readback_p;
   queue queue; // Instruction queue
@@ -221,7 +239,7 @@ const u16 CPU_FLAG_RESERVED5  = 0b0000000000100000;
 const u16 CPU_FLAG_ZERO       = 0b0000000001000000;
 const u16 CPU_FLAG_SIGN       = 0b0000000010000000;
 const u16 CPU_FLAG_TRAP       = 0b0000000100000000;
-const u16 CPU_FLAG_INT_ENABLE = 0b0000001000000000;
+const u16 CPU_FLAG_INTERRUPT  = 0b0000001000000000;
 const u16 CPU_FLAG_DIRECTION  = 0b0000010000000000;
 const u16 CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 
@@ -258,10 +276,47 @@ const int RESET_PIN = 5;
 const int READY_PIN = 6;
 const int TEST_PIN = 7;
 
-// ALE pin #50 status i in PINB bit #3.
+
+// -------------------------- CPU Input pins ----------------------------------
+
+// READY pin #6 is written by PORTH bit #3
+#define READY_PIN 6
+#define WRITE_READY_PIN(x) (PORTH |= ((x) << 3))
+
+// TEST pin #7 is written by PORTH bit #4
+#define TEST_PIN 7
+#define WRITE_TEST_PIN(x) (PORTH |= ((x) << 4))
+
+// LOCK pin #10 is written by PORTB bit #4
+#define LOCK_PIN 10
+#define WRITE_LOCK_PIN(x) (PORTB |= ((x) << 4))
+
+// INTR pin #12 is written by PORTB bit #6
+#define INTR_PIN 12
+#define WRITE_INTR_PIN(x) (PORTB |= ((x) << 6))
+
+// NMI pin #13 is written to by PORTB bit #7
+#define NMI_PIN 13
+#define WRITE_NMI_PIN(x) (PORTB |= ((x) << 7))
+
+// --------------------------8288 Control lines -------------------------------
+// ALE pin #50 is read by PINB bit #3
 #define ALE_PIN 50
 #define READ_ALE_PIN ((PINB & 0x08) != 0)
 
+// DTR pin #49 is read by PINL bit #0
+#define DTR_PIN 49
+#define READ_DTR_PIN ((PINL & 0x01) != 0)
+
+// MCE/PDEN pin #43 is read by PINL bit #6
+#define MCEPDEN_PIN 43
+#define READ_MCEPDEN_PIN ((PINL & 0x40) != 0) 
+
+// DEN pin #44 is read by PINL bit #5
+#define DEN_PIN 44
+#define READ_DEN_PIN ((PINL & 0x20) != 0)
+
+// --------------------------8288 Command lines -------------------------------
 // MRDC pin #51 is read by PINB bit #2
 #define MRDC_PIN 51
 #define READ_MRDC_PIN ((PINB & 0x04) != 0)
@@ -286,11 +341,25 @@ const int TEST_PIN = 7;
 #define IOWC_PIN 47
 #define READ_IOWC_PIN ((PINL & 0x04) != 0)
 
+// INTA pin #45 is read by PINL bit #4
+#define INTA_PIN 45
+#define READ_INTA_PIN ((PINL & 0x10) != 0)
+
 // Address pins, used for slow address reading via digitalRead()
 const int ADDRESS_PINS[] = {
   23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42
 };
 const int ADDRESS_LINES = 20;
+
+// All output pins, used to set pin direction on setup
+const int OUTPUT_PINS[] = {
+  4,  // CLK
+  5,  // RESET
+  6,  // READY
+  7,  // TEST
+  12, // INTR
+  13, // NMI
+};
 
 // All input pins, used to set pin direction on setup
 const int INPUT_PINS[] = {
@@ -299,9 +368,6 @@ const int INPUT_PINS[] = {
   43,44,45,46,47,48,49,50,51,52,53
 };
 
-// High word of cycle count
-unsigned long CYCLE_NUM_H = 0;
-// Low word of cycle count
 unsigned long CYCLE_NUM = 0;
 
 // Bit reverse LUT from http://graphics.stanford.edu/~seander/bithacks.html#BitReverseTable

@@ -24,29 +24,38 @@
 // Define the initial register state to load here.
 // Reserved flags will be set for you.
 registers LOAD_REGISTERS = {
-  0x1111, // AX
-  0x2222, // BX
-  0x3333, // CX
-  0x4444, // DX
-  0x5000, // SS
-  0x1000, // SP
+  0x4000, // AX
+  0x5000, // BX
+  0x6000, // CX
+  0x7000, // DX
+  0x1000, // SS
+  0xFFFF, // SP
   0x0000, // FLAGS
   0xCCCC, // IP
   0xF000, // CS
-  0x7777, // DS
-  0x8888, // ES
-  0x9999, // BP
-  0xAAAA, // SI
-  0xBBBB, // DI
+  0x2000, // DS
+  0x3000, // ES
+  0x0001, // BP
+  0x1000, // SI
+  0x0003, // DI
 };
 
 // Write the program to execute here, to start at the provided CS:IP.
-const unsigned char CODE_SEGMENT[] = {
-  0xFE, 0x18
+const unsigned char CODE_SEGMENT[] = {  
+  
+  0x90, 0x90, 0x90, 0x90
+
 };
+
+// Specify how many bytes of CODE_SEGMENT to have prefetched before execution begins
+// This value must be <= the length of CODE_SEGMENT
+size_t PREFETCH_LEN = 4;
+
 // -----------------------End User-provided state -----------------------------
 
+
 static Cpu CPU;
+registers INITIAL_REGISTERS;
 
 // Register load routine.
 static u8 LOAD_PROGRAM[] = {
@@ -58,6 +67,43 @@ static u8 LOAD_PROGRAM[] = {
 
 static u8 JUMP_VECTOR[] = {
   0xEA, 0x00, 0x00, 0x00, 0x00
+};
+
+// Prefetch programs.
+// We need an instruction that fetches one more byte then the length of the instruction.
+// We use an 'or al, *' instruction here, manipulating the modrm to adjust the length of
+// the EA calculation so that the first prefetched byte is executed in a t1 state.
+
+// 0 is fed to OR so that al is not changed. However, this does overwrite flags, so POPF
+// is used to reset the flag state. Luckily, POPF fetches one more byte so this works out
+// for us nicely. The only issue is there appears to be a delay when a byte is fetched 
+// from a full queue - POPF from a full queue will not fetch a code byte. I haven't 
+// thought of a way around this yet, so for now, flags can only be preserved if prefetching
+// 1-3 bytes.
+
+size_t PREFETCH_PROGRAM_LEN = 0;
+size_t PREFETCH_STACK_ADJUST = 0;
+u8 *PREFETCH_PROGRAM = NULL;
+
+// Program to set up 1 byte in prefetch and pop flags
+static u8 PREFETCH_1[] = {
+  0x0A, 0xC0, 0x9D
+};
+
+// Program to set up 2 bytes in prefetch and pop flags
+static u8 PREFETCH_2[] = {
+  0x0A, 0x0A, 0x9D, 0x90, 0x90, 0x90, 0x90
+};
+
+// Program to set up 3 bytes in prefetch and pop flags
+static u8 PREFETCH_3[] = {
+  0x0A, 0x02, 0x0A, 0x04, 0x9D
+};
+
+// Program to set up 4 bytes in prefetch
+// NOTE: does not preserve flags due to fetch delays after full queue
+static u8 PREFETCH_4[] = {
+  0x0A, 0x02, 0x0A, 0x02, 0x0A, 0x02
 };
 
 // Patch offsets for load routine
@@ -83,74 +129,137 @@ static const u8 STORE_PROGRAM[] = {
   0x89, 0xE8, 0xE7, 0xFE, 0x89, 0xF0, 0xE7, 0xFE, 0x89, 0xF8, 0xE7, 0xFE, 0xB0, 0xFF, 0xE6, 0xFD
 };
 
-/*
-static const unsigned char CODE_SEGMENT[] = {
-  0xD5, 0x0A, // AAD
-  0xD5, 0x0A, // AAD
-  0x05, 0xEF, 0xBE, // ADD AX, 0xBEEF
-};
-*/
-
-/*
-static const unsigned char CODE_SEGMENT[] = {
-  0xD5, 0x0A, // AAD
-  0x40, 0x40, 0x40, 0x40, // INC AX
-  0x40, 0x40, 0x40, 0x40, // INC AX
-};
-*/
-
-/*
-static const unsigned char CODE_SEGMENT[] = {
-  0x02, 0x07, // ADD al, [bx]
-  0x02, 0x02,// ADD al, [bp+si]
-  0x02, 0x02,
-  0x01, 0x02, 0x03, 0x04, // prefetch bytes
-};
-*/
-
-/* Prefetch 1
-static const unsigned char CODE_SEGMENT[] = {
-  0x0C, 0x00, // OR 
-};
-*/
-
-// Prefetch 2
-/*
-static const unsigned char CODE_SEGMENT[] = {
-  0x0A, 0x02, 0x01, 0x02
-};
-*/
-
 void setup() {
   Serial.begin(BAUD_RATE);
 
-  pinMode(CLK_PIN, OUTPUT);
-  pinMode(RESET_PIN, OUTPUT);
-  pinMode(READY_PIN, OUTPUT);
-  pinMode(TEST_PIN, OUTPUT);
-
+  // Set all output pins to OUTPUT
+  for( int p = 0; p < (sizeof OUTPUT_PINS / sizeof OUTPUT_PINS[0]); p++ ) {
+    pinMode(OUTPUT_PINS[p], OUTPUT);
+  }
+  // Set all input pins to INPUT
   for( int p = 0; p < (sizeof INPUT_PINS / sizeof INPUT_PINS[0]); p++ ) {
     pinMode(INPUT_PINS[p], INPUT);
   }
 
-  digitalWrite(TEST_PIN, LOW);
+  // Default output pin states
   digitalWrite(READY_PIN, HIGH);
-  
+  digitalWrite(TEST_PIN, LOW);
+  // Must set these to a known value or risk spurious interrupts!
+  digitalWrite(INTR_PIN, LOW);
+  digitalWrite(NMI_PIN, LOW);  
+
   // Wait for CPU to initialize
   delayMicroseconds(100);
 
   // Patch the reset vector jump
   patch_vector(JUMP_VECTOR, LOAD_SEG);
 
+  // Prefetch request setup
+  // Don't allow PREFETCH_LEN > CODE_SEGMENT
+  if(PREFETCH_LEN > sizeof CODE_SEGMENT) {
+    PREFETCH_LEN = 0;
+  }
+  switch(PREFETCH_LEN) {
+    case 0:
+      // No adjustment necessary
+      PREFETCH_PROGRAM_LEN = 0;   
+      PREFETCH_STACK_ADJUST = 0;
+      break;
+    case 1:
+      PREFETCH_PROGRAM = PREFETCH_1;
+      PREFETCH_PROGRAM_LEN = sizeof PREFETCH_1;
+      PREFETCH_STACK_ADJUST = 2; // Account for POPF
+      break;
+    case 2:
+      PREFETCH_PROGRAM = PREFETCH_2;
+      PREFETCH_PROGRAM_LEN = sizeof PREFETCH_2;
+      PREFETCH_STACK_ADJUST = 2; // Account for POPF
+      break;
+    case 3:
+      PREFETCH_PROGRAM = PREFETCH_3;
+      PREFETCH_PROGRAM_LEN = sizeof PREFETCH_3;
+      PREFETCH_STACK_ADJUST = 2; // Account for POPF
+      break;
+    case 4:
+      PREFETCH_PROGRAM = PREFETCH_4;
+      PREFETCH_PROGRAM_LEN = sizeof PREFETCH_4;
+      PREFETCH_STACK_ADJUST = 0; // Prefetch 4 does not pop flags
+      break;
+    default:  
+      // Invalid value for prefetch specfied. Don't prefetch.
+      PREFETCH_PROGRAM_LEN = 0;
+      PREFETCH_STACK_ADJUST = 0;
+      PREFETCH_LEN = 0;
+  }
+
+  adjust_flags(LOAD_REGISTERS.ax & 0xFF);
+
+  // Save initial register state
+  memcpy(&INITIAL_REGISTERS, &LOAD_REGISTERS, sizeof LOAD_REGISTERS);
+
+  // Adjust IP by size of prefetch program so that we 'catch up' at end of prefetch
+  LOAD_REGISTERS.ip -= PREFETCH_PROGRAM_LEN;
+  // Adjust SP if prefetch program pops flags
+  LOAD_REGISTERS.sp -= PREFETCH_STACK_ADJUST;
+
   // Patch load routine with specified register values
   patch_load(&LOAD_REGISTERS, LOAD_PROGRAM);
+}
+
+// Adjust user supplied flags. For various reasons we may not want to allow the user
+// to specify certain flag states, or are unable to set them and must model the
+// intial flag state
+void adjust_flags(u8 result) {
 
   // Enforce reserved bits in user-provided flags
   LOAD_REGISTERS.flags &= CPU_FLAG_DEFAULT_CLEAR;
   LOAD_REGISTERS.flags |= CPU_FLAG_DEFAULT_SET;
 
-  // Wait for serial port to be ready
-  while (!Serial);
+  // Don't allow Trap or Interrupt flags
+  LOAD_REGISTERS.flags &= ~CPU_FLAG_TRAP;
+  LOAD_REGISTERS.flags &= ~CPU_FLAG_INTERRUPT;
+
+  // A prefetch setup of 4 bytes cannot restore flags due to bus delays.
+  // This means the starting result of flags should be adjusted for the 'or al, 0'
+  // operation.
+  if(PREFETCH_LEN == 4) {
+
+    // Clear overflow & carry flags
+    LOAD_REGISTERS.flags &= ~CPU_FLAG_OVERFLOW;
+    LOAD_REGISTERS.flags &= ~CPU_FLAG_CARRY;
+
+    // Zero flag
+    if(result == 0) {
+      LOAD_REGISTERS.flags |= CPU_FLAG_ZERO;
+    }
+    else {
+      LOAD_REGISTERS.flags &= ~CPU_FLAG_ZERO;
+    }
+    // Sign flag
+    if(result & 0x80) {
+      LOAD_REGISTERS.flags |= CPU_FLAG_SIGN;
+    }
+    else {
+      LOAD_REGISTERS.flags &= ~CPU_FLAG_SIGN;
+    }
+    // Parity flag. Could replace with table lookup
+    int n_bits = 0;
+    for(int i = 0; i < 8; i++) {
+      if((result >> i) & 0x01) {
+        // Count the 1 bit
+        n_bits++;
+      }
+    }
+    if(n_bits & 0x01) {
+      // Parity is odd - clear parity flag
+      LOAD_REGISTERS.flags &= ~CPU_FLAG_PARITY;
+    }
+    else {
+      // Parity is even - set parity flag
+      LOAD_REGISTERS.flags |= CPU_FLAG_PARITY;
+    }
+  }
+
 }
 
 void patch_vector(u8 *vec, u16 seg) {
@@ -204,7 +313,7 @@ void print_registers(registers *regs) {
   char z_chr = CPU_FLAG_ZERO & f ? 'Z' : 'z';
   char s_chr = CPU_FLAG_SIGN & f ? 'S' : 's';
   char t_chr = CPU_FLAG_TRAP & f ? 'T' : 't';
-  char i_chr = CPU_FLAG_INT_ENABLE & f ? 'I' : 'i';
+  char i_chr = CPU_FLAG_INTERRUPT & f ? 'I' : 'i';
   char d_chr = CPU_FLAG_DIRECTION & f ? 'D' : 'd';
   char o_chr = CPU_FLAG_OVERFLOW & f ? 'O' : 'o';
   
@@ -247,7 +356,7 @@ void print_cpu_state() {
     seg_str = SEGMENT_STRINGS[(size_t)seg];
   }
 
-  // Draw some sad ascii representation of bus states
+  // Draw some sad ascii representation of bus transfers
   char *st_str = "  ";
   switch(CPU.bus_cycle) {
       case t1:
@@ -336,11 +445,30 @@ void change_state(machine_state new_state) {
       break;
     case LoadDone:
       break;
-    case Execute:
+    case PrefetchSetup:
       CPU.v_pc = 0;
+      break;
+    case Execute:
+
+      #if RESET_CYCLE_NUMBER
+        CYCLE_NUM = 1;
+      #endif
+
+      if(CPU.v_state == PrefetchSetup) {
+        // Carry over p_pc to v_pc as first bytes of program have been prefetched
+        CPU.v_pc = CPU.p_pc;
+      }
+      else {
+        CPU.v_pc = 0;
+      }
       break;
     case Store:
       CPU.v_pc = 0;
+      
+      // Take a raw u8 pointer to the register struct. Both x86 and Arduino are little-endian,
+      // so we can write raw incoming data over the struct. Faster than logic required to set
+      // specific members. 
+      CPU.readback_p = (u8 *)&CPU.post_regs;      
       break;
   }
 
@@ -367,10 +495,6 @@ void cycle() {
   clock_tick();
 
   CYCLE_NUM++;
-  if(CYCLE_NUM == 0) {
-    // overflow
-    CYCLE_NUM_H++;
-  }
 
   if(!CPU.doing_reset) {
     switch(CPU.bus_cycle) {
@@ -544,9 +668,79 @@ void cycle() {
       // LoadDone is triggered by the queue flush following the jump in Load.
       // We wait for the next ALE and begin Execute.
       if(READ_ALE_PIN) {
-        // First bus cycle of the instruction to execute. Transition to Execute.
-        change_state(Execute);
+        // First bus cycle after jump. If requested prefetch is 0, transition directly
+        // to execute state, otherwise transition to PrefetchSetup.
+        if(PREFETCH_LEN > 0) {
+          change_state(PrefetchSetup);
+        } 
+        else {
+          change_state(Execute);
+        }
       }
+      break;
+
+    // PrefetchSetup fills the prefetch queue with the requested number of bytes from 
+    // the user program (or NOP on overflow).
+    case PrefetchSetup:
+      if(!READ_MRDC_PIN) {
+        // CPU is reading (MRDC active-low)
+
+        if(CPU.bus_state == CODE) {
+          // CPU is reading code byte
+          if(CPU.v_pc < PREFETCH_PROGRAM_LEN) {
+            // Feed prefetch program instruction to CPU
+            CPU.data_bus = PREFETCH_PROGRAM[CPU.v_pc];
+            CPU.data_type = DATA_PREFETCH_PROGRAM;
+            CPU.v_pc++;
+          }
+          else if(CPU.p_pc < PREFETCH_LEN) {
+            // We are out of the prefetch program, feed bytes from code segment
+
+            CPU.data_bus = CODE_SEGMENT[CPU.p_pc];
+            CPU.data_type = DATA_PROGRAM;
+            CPU.p_pc++;
+          }
+          else {
+            // Ran out of program, so return a flagged NOP. (Shouldn't occur...)
+            CPU.data_bus = OPCODE_NOP;
+            CPU.data_type = DATA_PROGRAM_END;
+          }
+          data_bus_write(CPU.data_bus);
+        }
+
+        if(CPU.bus_state == MEMR && CPU.opcode == 0x0A) {
+          // Memory read during OR prefetch-padding operation. To preserve AL, provide
+          // 0 as an operand.
+          //Serial.println("## OR MEMORY OPERAND ##");
+          CPU.data_bus = 0;
+          CPU.data_type = DATA_PREFETCH_PROGRAM;
+          data_bus_write(CPU.data_bus);
+        }
+
+        if(CPU.bus_state == MEMR && CPU.opcode == OPCODE_POPF) {
+          if(((segment)((CPU.status0 & 0x18) >> 3) & 0x03) == SegSS) {
+            // Read from stack segment. This should be from prefetch POPF.
+
+            if(CPU.p_popread_n < 2) {
+              // First stack read, send LSB of flags
+              //Serial.println("## POPF STACK READ ##");
+              CPU.data_bus = LOAD_PROGRAM[CPU.p_popread_n];
+              CPU.data_type = DATA_PREFETCH_PROGRAM;
+            }
+            else {
+              Serial.println("## INVALID STACK READ DURING PREFETCH SETUP ##");
+            }
+          }
+          data_bus_write(CPU.data_bus);
+        }        
+      }
+
+      // We leave the PrefetchSetup state when the first byte of the user program is fetched
+      // from the queue
+      if(CPU.q_ff && (CPU.qt == DATA_PROGRAM)) {
+        // From PrefetchSetup -> Execute transition, p_pc should become new v_pc
+        change_state(Execute);
+      }      
       break;
 
     case Execute:
@@ -558,20 +752,17 @@ void cycle() {
             CPU.data_bus = CODE_SEGMENT[CPU.v_pc];
             CPU.data_type = DATA_PROGRAM;
             CPU.v_pc++;
-            /*
-            if(CPU.v_pc == sizeof CODE_SEGMENT) {
-              // Done reading program
-              Serial.println("## Entering store ##");
-              CPU.v_state = Store;
-              CPU.v_pc = 0;
-            }
-            */
           }
           else {
             // Ran out of program, so return NOP.
             CPU.data_bus = OPCODE_NOP;
             CPU.data_type = DATA_PROGRAM_END;
           }
+        }
+
+        if(CPU.bus_state == MEMR && CPU.opcode == 0x9D) {
+          // Intercept POPF to prevent TRAP flag from being set
+          CPU.data_bus = 0;
         }
         data_bus_write(CPU.data_bus);
       }
@@ -585,12 +776,8 @@ void cycle() {
       // byte of an instruction. This accomodates user programs with incomplete instructions, they will 
       // fetch 'subsequent byte' NOPs for remaining required arguments (hopefully valid ones), until a 
       // 'first byte' NOP is read.
-      if(CPU.q_ff & (CPU.qt == DATA_PROGRAM_END)) {
+      if(CPU.q_ff && (CPU.qt == DATA_PROGRAM_END)) {
         change_state(Store);
-        // Take a raw u8 pointer to the register struct. Both x86 and Arduino are little-endian,
-        // so we can write raw incoming data over the struct. Faster than logic required to set
-        // specific members. 
-        CPU.readback_p = (u8 *)&CPU.post_regs;
       }
 
       break;
@@ -634,9 +821,10 @@ void cycle() {
         }
         else {
           // We shouldn't be writing to any other addresses, something wrong happened
-          Serial.println("## INVALID STORE WRITE ##");
-          Serial.print("##: ");
-          Serial.println(CPU.address_latch, HEX);
+          Serial.print("## INVALID STORE WRITE @");
+          Serial.print(CPU.v_pc, HEX);
+          Serial.println(" ##");
+          //print_cpu_state();
         }
         #if DEBUG_STORE
           Serial.print("## Store memory write: ");
@@ -692,6 +880,11 @@ void cycle() {
         print_cpu_state();
       #endif  
       break;
+    case PrefetchSetup:
+      #if TRACE_PREFETCH
+        print_cpu_state();
+      #endif
+      break;
     case Execute:
       #if TRACE_EXECUTE
         print_cpu_state();
@@ -714,7 +907,8 @@ void print_addr(unsigned long addr) {
 // Resets the CPU by asserting RESET line for at least 4 cycles and waits for ALE signal.
 bool cpu_reset() {
 
-  CYCLE_NUM_H = 0;
+  memset(&CPU, 0, sizeof CPU);
+  
   CYCLE_NUM = 0;
   bool ale_went_off = false;
   CPU.state_begin_time = 0;
@@ -810,7 +1004,7 @@ void loop() {
     if(CPU.v_state == Done) {
 
       Serial.println(">> Initial Loaded state:");
-      print_registers(&LOAD_REGISTERS);
+      print_registers(&INITIAL_REGISTERS);
       Serial.println(">> End state:");
       print_registers(&CPU.post_regs);
     }

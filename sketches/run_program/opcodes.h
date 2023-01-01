@@ -20,6 +20,8 @@
 #define _ARDUINO8088_OPCODES_H
 
 #define OPCODE_NOP 0x90
+#define OPCODE_POPF 0x9D
+
 #define MODRM_OP(M) (((M & 0b00111000) >> 3) & 0x07)
 
 #define GRP1 105
