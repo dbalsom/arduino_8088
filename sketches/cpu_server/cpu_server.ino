@@ -94,8 +94,11 @@ command_func V_TABLE[] = {
   &cmd_queue_bytes,
   &cmd_write_pin,
   &cmd_read_pin,
-  &cmd_get_program_state
+  &cmd_get_program_state,
+  &cmd_get_last_error
 };
+
+char LAST_ERR[MAX_ERR_LEN] = {0};
 
 // Main Sketch setup routine
 void setup() {
@@ -123,7 +126,12 @@ void setup() {
   patch_vector(JUMP_VECTOR, LOAD_SEG);
 
   beep(100);
+  set_error("NO ERROR");
   SERVER.c_state = WaitingForCommand;
+}
+
+void set_error(const char *msg) {
+  strncpy(LAST_ERR, msg, MAX_ERR_LEN - 1);
 }
 
 // Send a failure code byte in reponse to a failed command
@@ -342,8 +350,13 @@ bool cmd_finalize() {
 // AX, BX, CX, DX, SS, SP, FLAGS, IP, CS, DS, ES, BP, SI, DI
 bool cmd_store(void) {
 
+
+  char err_msg[20];
+
   // Command only valid in ExecuteDone state
   if(CPU.v_state != ExecuteDone) {
+    snprintf(err_msg, 20, "Wrong state: %d ", CPU.v_state);
+    set_error(err_msg);
     return false;
   }
 
@@ -428,6 +441,12 @@ bool cmd_read_pin(void) {
 // Server command - Get program state
 bool cmd_get_program_state(void) {
   Serial.write((u8)CPU.v_state);
+  return true;
+}
+
+// Server command - Get last error
+bool cmd_get_last_error(void) {
+  Serial.write(LAST_ERR);
   return true;
 }
 
@@ -927,9 +946,11 @@ void cycle() {
         }
         else {
           // We shouldn't be writing to any other addresses, something wrong happened
-          Serial.println("## INVALID STORE WRITE ##");
-          Serial.print("##: ");
-          Serial.println(CPU.address_latch, HEX);
+          #if DEBUG_STORE
+            Serial.println("## INVALID STORE WRITE ##");
+            Serial.print("##: ");
+            Serial.println(CPU.address_latch, HEX);
+          #endif
         }
         #if DEBUG_STORE
           Serial.print("## Store memory write: ");

@@ -24,14 +24,14 @@
 // Define the initial register state to load here.
 // Reserved flags will be set for you.
 registers LOAD_REGISTERS = {
-  0x4000, // AX
+  0xFFFF, // AX
   0x5000, // BX
-  0x6000, // CX
+  0x0002, // CX
   0x7000, // DX
   0x1000, // SS
   0xFFFF, // SP
   0x0000, // FLAGS
-  0xCCCC, // IP
+  0x0000, // IP
   0xF000, // CS
   0x2000, // DS
   0x3000, // ES
@@ -42,17 +42,16 @@ registers LOAD_REGISTERS = {
 
 // Write the program to execute here, to start at the provided CS:IP.
 const unsigned char CODE_SEGMENT[] = {  
-  
-  0x90, 0x90, 0x90, 0x90
-
+  0xEA, 0x5B, 0xE0, 0x00, 0xF0, 0xFA, 0xB4, 0xD5, 0x9E, 0x73, 0x4A
+  //0xFF, 0x20, 0x90, 0x90
+  //0x40, 0x40, 0x40, 0x40, 0x90, 0x90, 0x90
 };
 
 // Specify how many bytes of CODE_SEGMENT to have prefetched before execution begins
 // This value must be <= the length of CODE_SEGMENT
-size_t PREFETCH_LEN = 4;
+size_t PREFETCH_LEN = 0;
 
 // -----------------------End User-provided state -----------------------------
-
 
 static Cpu CPU;
 registers INITIAL_REGISTERS;
@@ -128,6 +127,9 @@ static const u8 STORE_PROGRAM[] = {
   0x9C, 0xE8, 0x00, 0x00, 0x8C, 0xC8, 0xE7, 0xFE, 0x8C, 0xD8, 0xE7, 0xFE, 0x8C, 0xC0, 0xE7, 0xFE,
   0x89, 0xE8, 0xE7, 0xFE, 0x89, 0xF0, 0xE7, 0xFE, 0x89, 0xF8, 0xE7, 0xFE, 0xB0, 0xFF, 0xE6, 0xFD
 };
+
+u32 RAM_ADDRESSES[RAM_SIZE] = {0};
+u8 RAM[RAM_SIZE] = {0};
 
 void setup() {
   Serial.begin(BAUD_RATE);
@@ -379,19 +381,28 @@ void print_cpu_state() {
   }
 
   // Make string for bus reads and writes
+  char w_char = ' ';
   op_buf[0] = 0;
   if(!READ_MRDC_PIN || !READ_IORC_PIN) {
     snprintf(op_buf, 7, "<-r %02X", CPU.data_bus);
+    if((CPU.mcycle_state != CODE)) {
+      w_char = CPU.op_width == 0 ? 'b' : 'w';
+    }
   }
   if(!READ_MWTC_PIN || !READ_IOWC_PIN) {
     snprintf(op_buf, 7, "w-> %02X", CPU.data_bus);
+    if((CPU.mcycle_state != CODE)) {
+      w_char = CPU.op_width == 0 ? 'b' : 'w';
+    }
   }
+
+  char f_char = FETCH_STATE_CHARS[CPU.fetch_state];
 
   const char *q_str = queue_to_string();
 
   snprintf(
     buf, 81, 
-    "%08ld %c %s[%05lX] %2s M:%c%c%c I:%c%c%c %-4s %s %2s %6s | %c%d [%-8s]", 
+    "%08ld %c %s[%05lX] %2s M:%c%c%c I:%c%c%c %-4s %s %2s %6s (%ld%c) | %c%d%c%d %c%d [%-8s]", 
     CYCLE_NUM, 
     v_chr, 
     ale_str,
@@ -403,6 +414,12 @@ void print_cpu_state() {
     CYCLE_STRINGS[(size_t)CPU.bus_cycle], 
     st_str,
     op_buf,
+    CPU.transfer_n,
+    w_char,
+    f_char,
+    CPU.pf_stack.len,
+    CPU.fetch_scheduled ? 's' : '.',
+    CPU.fetch_delay,
     q_char,
     CPU.queue.len,
     q_str
@@ -447,6 +464,7 @@ void change_state(machine_state new_state) {
       break;
     case PrefetchSetup:
       CPU.v_pc = 0;
+      CPU.p_popread_n = 0;
       break;
     case Execute:
 
@@ -490,25 +508,99 @@ void change_state(machine_state new_state) {
   CPU.v_state = new_state;
 }
 
+void make_prefetch_decision(int delay) {
+
+  if(is_bus_busy()) {
+
+    // The BIU knows the size of the transfer being performed, even though the 8088 reads/writes a byte at a time.
+    // We won't schedule a prefetch during the first byte of a word transfer.
+
+    if(CPU.op_width) {
+      // Word operand
+      if(CPU.transfer_n & 0x01) {
+        // Odd transfer #, this is is the first byte of a word, do not prefetch.
+        return;
+      }
+    }
+    // Byte operand continues
+  }
+
+  if(CPU.mcycle_state == CODE && CPU.queue.len == 3) {
+    // Queue length is 3, but a fetch is in progress. Delay the fetch 2 cycles.
+    CPU.fetch_state = FETCH_DELAY;
+    CPU.fetch_delay = 2;
+  }
+  else if(CPU.queue.len < QUEUE_MAX) {
+    // Room in queue to fetch
+    CPU.fetch_state = FETCH_SCHEDULED;
+    CPU.pf_scheduled_id++;
+    push_pf_stack(CPU.pf_scheduled_id);
+    CPU.fetch_scheduled = true;
+    CPU.fetch_delay = delay;
+  }
+}
+
+bool is_bus_busy() {
+
+  if((CPU.mcycle_state == MEMR) || (CPU.mcycle_state == MEMW) || (CPU.mcycle_state == IOR) || (CPU.mcycle_state == IOW)) {
+    return true;
+  }
+  return false;
+}
+
+void bus_begin() {
+  /*
+  Serial.print(">> bus cycle: ");
+  Serial.print(CPU.bus_state);
+  Serial.print(" prefetch scheduled: ");
+  Serial.println(CPU.fetch_scheduled);
+  */
+
+  // Capture mcycle state on T1 as bus state goes PASV on T3 & T4
+  CPU.mcycle_state = CPU.bus_state;
+
+  if(CPU.bus_state == CODE && !CPU.fetch_scheduled) {
+    // Our prefetch predictor didn't expect a code fetch
+    Serial.println("## Error: Unscheduled prefetch ##");
+  }
+
+  if(is_bus_busy()) {
+    // Bus transfer is starting
+    if(CPU.fetch_scheduled) {
+      // We expected a prefetch cycle, but a bus cycle is starting. This is caused by a r/w request to the 
+      // BIU after prefetch was scheduled. We can't predict this without tracking all the instruction
+      // microcode... Just set a state to flag the cancellation 
+      
+      pop_pf_stack();
+      if(CPU.pf_stack.len == 0) {
+        CPU.fetch_scheduled = false;
+      }
+      CPU.fetch_state = FETCH_CANCELLED;
+      CPU.fetch_delay = 1;
+    }
+    CPU.transfer_n++;
+  }
+}
+
 void cycle() {
 
   clock_tick();
-
+  read_status0();
   CYCLE_NUM++;
 
   if(!CPU.doing_reset) {
     switch(CPU.bus_cycle) {
       case t1:
-        // Begin a bus cycle only if signalled
+        // Transition to t2 only if we are not PASV
         if(CPU.bus_state != PASV) {
           CPU.bus_cycle = t2;
         }
-        // Capture the state of the cycle in T1, as the state will go passive T3-T4
-        CPU.cycle_state = (s_state)(CPU.status0 & 0x07);    
         break;
 
       case t2:
+
         CPU.bus_cycle = t3;
+        make_prefetch_decision(2);
         break;
 
       case t3:
@@ -518,31 +610,73 @@ void cycle() {
 
       case t4:
         // Did we complete a code fetch? If so, increment queue len
-        if(CPU.cycle_state == CODE) {
+        if(CPU.mcycle_state == CODE) {
           if(CPU.queue.len < QUEUE_MAX) {
+            if(!CPU.fetch_scheduled) {
+              Serial.println("## Error: Unscheduled prefetch ##");
+            }
+            else {
+              u32 pf_completed_id = pop_pf_stack();
+              if(CPU.pf_stack.len == 0) {
+                CPU.fetch_scheduled = false;
+              }
+              /*
+              if(pf_completed_id == CPU.pf_scheduled_id) {
+                Serial.print("Fetched: ");
+                Serial.print(pf_completed_id);
+                Serial.print(" Scheduled: ");
+                Serial.println(CPU.pf_scheduled_id);
+
+                // Last scheduled prefetch was completed.
+                CPU.fetch_scheduled = false;
+                
+              }
+              */
+            }
             push_queue(CPU.data_bus, CPU.data_type);
           }
           else {
-            // Shouldn't be here
             Serial.println("## Error: Invalid Queue Length++ ##");
           }
+
+          if(CPU.fetch_state != FETCH_SCHEDULED && CPU.fetch_state != FETCH_DELAY) {
+            // No fetch was requested in T3 so go idle
+            CPU.fetch_state = FETCH_IDLE;
+          }
         }
+
+        // Capture the state of the cycle in T1, as the state will go passive T3-T4
+        CPU.mcycle_state = (s_state)(CPU.status0 & 0x07);
+
+        // Handle some prefetch bookkeeping
+        if(CPU.mcycle_state == PASV && CPU.fetch_scheduled && CPU.fetch_delay == 0) {
+          // Are we in PASV with a prefetch scheduled? This indicates a prefetch abort.
+          CPU.fetch_state = FETCH_ABORT;
+          pop_pf_stack();
+          CPU.fetch_scheduled = false;
+          CPU.fetch_delay = 2;
+        }
+
         CPU.bus_cycle = t1;
         break;
     }
   }
 
-  read_status0();
   // bus_state is the instantaneous state per cycle. May not always be valid. 
-  // for state of the current bus cycle use cycle_state
+  // for state of the current bus cycle use mcycle_state
+  s_state last_state = CPU.bus_state;
   CPU.bus_state = (s_state)(CPU.status0 & 0x07);
+
+  if(last_state == PASV && CPU.bus_state != PASV) {
+    // We are beginning a bus transfer
+    bus_begin();
+  }
 
   // Check QS0-QS1 queue status bits
   u8 q = (CPU.status0 >> 6) & 0x03;
   CPU.qb = 0xFF;
   CPU.q_ff = false;
 
-  // Handle queue activity
   if((q == QUEUE_FIRST) || (q == QUEUE_SUBSEQUENT)) {
     // We fetched a byte from queue last cycle
     if(CPU.queue.len > 0 ) {
@@ -551,11 +685,20 @@ void cycle() {
         // Set flag for first instruction byte fetched
         CPU.q_ff = true;
         CPU.q_fn = 0; // First byte of instruction
+
+        CPU.transfer_n = 0; // Reset per-instruction transfer count
+        CPU.op_width = OPCODE_WIDTH[CPU.qb]; // Look up width of this instruction
         CPU.opcode = CPU.qb;
       }
       else {
         // Subsequent byte of instruction fetched
         CPU.q_fn++;
+      }
+
+      // Did this queue read trigger a fetch?
+      if(CPU.queue.len == 3) {
+        // Queue was previously full
+        make_prefetch_decision(3);
       }
     }
     else {
@@ -566,11 +709,74 @@ void cycle() {
     // Queue was flushed last cycle
     empty_queue();
 
+    // Flushing the queue cancels any pending prefetches and schedules a new prefetch.
+    // We can't set FETCH_SCHEDULED flag as we only find out about the queue flush
+    // the cycle after it happens, but an 'S' is implied on the previous cycle.
+
+    init_pf_stack();
+    CPU.pf_scheduled_id++;
+    push_pf_stack(CPU.pf_scheduled_id);
+    CPU.fetch_scheduled = true;
+
+    CPU.fetch_state = FETCH_DELAY;
+    CPU.fetch_delay = 2;
+
     #if TRACE_QUEUE
       Serial.println("## Queue Flushed ##");
       Serial.print("## PC: ");
       Serial.println(CPU.v_pc);
     #endif
+  }
+
+  // Process prefetch delays
+  switch(CPU.fetch_state) {
+      case FETCH_CANCELLED:
+        if(CPU.fetch_delay > 0) {
+          CPU.fetch_delay--;
+        }
+        else {
+          CPU.fetch_state = FETCH_IDLE;
+        }
+        break;
+      case FETCH_SCHEDULED: 
+        // Only stay in scheduled state for 1 cycle
+        /*
+        if(CPU.fetch_delay == 1) {
+          CPU.fetch_state = FETCH_DELAY;
+        }
+        */
+        if(CPU.fetch_delay > 0) {
+          CPU.fetch_delay--;
+        }
+        else {
+          CPU.fetch_state = FETCH_IN_PROGRESS;
+        }
+        break;
+      case FETCH_DELAY:
+      
+        if(CPU.fetch_delay > 0) {
+          CPU.fetch_delay--;
+        }
+        else {
+          CPU.fetch_state = FETCH_IDLE;
+          if(CPU.fetch_scheduled) {
+            CPU.fetch_state = FETCH_IN_PROGRESS;
+          }
+          else if(CPU.bus_state == PASV) {
+            make_prefetch_decision(1);       
+          }
+        }
+        break;
+      case FETCH_ABORT:
+
+        if(CPU.fetch_delay > 0) {
+          CPU.fetch_delay--;
+        }
+        else {
+          CPU.fetch_state = FETCH_IDLE;
+          //pop_pf_stack();
+        }
+        
   }
 
   if(READ_ALE_PIN) {
@@ -726,6 +932,7 @@ void cycle() {
               //Serial.println("## POPF STACK READ ##");
               CPU.data_bus = LOAD_PROGRAM[CPU.p_popread_n];
               CPU.data_type = DATA_PREFETCH_PROGRAM;
+              CPU.p_popread_n++;
             }
             else {
               Serial.println("## INVALID STACK READ DURING PREFETCH SETUP ##");
@@ -747,6 +954,7 @@ void cycle() {
       // CPU is reading (MRDC active-low)
       if(!READ_MRDC_PIN) {
         if(CPU.bus_state == CODE) {
+
           // Reading code byte
           if(CPU.v_pc < sizeof CODE_SEGMENT) {
             CPU.data_bus = CODE_SEGMENT[CPU.v_pc];
@@ -757,19 +965,36 @@ void cycle() {
             // Ran out of program, so return NOP.
             CPU.data_bus = OPCODE_NOP;
             CPU.data_type = DATA_PROGRAM_END;
+            CPU.v_pc++;
           }
+          data_bus_write(CPU.data_bus);
         }
 
-        if(CPU.bus_state == MEMR && CPU.opcode == 0x9D) {
-          // Intercept POPF to prevent TRAP flag from being set
-          CPU.data_bus = 0;
+        if(CPU.bus_state == MEMR) {
+          // CPU is reading data
+
+          if(CPU.opcode == 0x9D) {
+            // Intercept POPF to prevent TRAP flag from being set
+            CPU.data_bus = 0;
+          }
+          else {
+            //Serial.println("## DATA READ ##");
+            CPU.data_bus = mem_read(CPU.address_latch);
+          }
+          data_bus_write(CPU.data_bus);
         }
-        data_bus_write(CPU.data_bus);
       }
 
-      // CPU is writing (MWTC active-low)
-      if(!READ_MWTC_PIN) {
-        CPU.data_bus = data_bus_read();
+      // CPU is writing (AMWC active-low)
+      if(!READ_AMWC_PIN) {
+
+        if(CPU.bus_state == MEMW) {
+          // CPU is writing data
+          // Serial.println("## DATA WRITE ##");
+          
+          CPU.data_bus = data_bus_read();
+          mem_write(CPU.address_latch, CPU.data_bus);
+        }
       }    
 
       // We end the Execute state when the first non-program NOP is fetched from the queue as the first
@@ -904,6 +1129,35 @@ void print_addr(unsigned long addr) {
   Serial.println(addr_buf);
 }
 
+// Read a byte from virtual memory. 
+u8 mem_read(u32 address) {
+
+  for(size_t i = 0; i < RAM_SIZE; i++) {
+    if((RAM_ADDRESSES[i] & RAM_ADDR_MASK) == address) {
+      // Found byte
+      return RAM[i];
+    }
+  }
+  // Byte not found
+  return 0;
+}
+
+// Write a byte to virtual memory.
+void mem_write(u32 address, u8 byte) {
+
+  for(size_t i = 0; i < RAM_SIZE; i++) {
+    if((RAM_ADDRESSES[i] & RAM_WRITE_FLAG) == 0) {
+      // Found empty slot
+
+      RAM_ADDRESSES[i] = address | RAM_WRITE_FLAG;
+      RAM[i] = byte;    
+      return;
+    }
+  }
+  // Out of RAM!
+  Serial.println("## RAM OVERFLOW ##");
+}
+
 // Resets the CPU by asserting RESET line for at least 4 cycles and waits for ALE signal.
 bool cpu_reset() {
 
@@ -937,10 +1191,25 @@ bool cpu_reset() {
   // Clock CPU while waiting for ALE
   int ale_cycles = 0;
 
-  // Reset takes 7 cycles, bit we can try for longer
+  // The first response from the CPU during reset is the queue status lines reporting that the 
+  // processor queue has been flushed. This happens on cycle #5 and corresponds with microcode
+  // word 1e6.
+  CPU.fetch_state = FETCH_IDLE;
+  u8 q = 0;
+
+  // Reset should only take 7 cycles, bit we can try for longer
   for( int i = 0; i < RESET_CYCLE_TIMEOUT; i++ ) {
     cycle();
     ale_cycles++;      
+
+    /*
+    q = (CPU.status0 >> 6) & 0x03;
+    if(q == QUEUE_FLUSHED) {
+      Serial.println(">>> Queue flushed!");
+      CPU.fetch_state = FETCH_SCHEDULED;
+      CPU.fetch_delay = 2;
+    }
+    */
 
     if(READ_ALE_PIN) {
       // ALE is active! CPU has successfully reset

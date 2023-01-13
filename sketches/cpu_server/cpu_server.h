@@ -27,6 +27,8 @@
 #define MODE_ASCII 0 // Use ASCII response codes (for interactive debugging only, client won't support)
 #define DEBUG_PROTO 0 // Insert debugging messages into serial output (Escaped by ##...##)
 
+#define MAX_ERR_LEN 50 // Maximum length of an error string
+
 const char RESPONSE_CHRS[] = {
   '!', '.'
 };
@@ -56,7 +58,8 @@ typedef enum {
   CmdWritePin        = 0x0F,
   CmdReadPin         = 0x10,
   CmdGetProgramState = 0x11,
-  CmdInvalid         = 0x12,
+  CmdLastError       = 0x12,
+  CmdInvalid         = 0x13,
   
 } server_command;
 
@@ -85,6 +88,7 @@ const u8 CMD_ALIASES[] = {
   'x', // CmdWritePin,
   'y', // CmdReadPin,
   'g', // CmdGetProgramState
+  'e', // CmdGetLastError
   0 // CmdInvalid
 };
 
@@ -118,6 +122,7 @@ const u8 CMD_INPUTS[] = {
   2,  // CmdWritePin,
   1,  // CmdReadPin,
   0,  // CmdGetProgramState,
+  0,  // CmdGetLastError,
   0   // CmdInvalid
 };
 
@@ -152,5 +157,6 @@ bool cmd_queue_bytes(void);
 bool cmd_write_pin(void);
 bool cmd_read_pin(void);
 bool cmd_get_program_state(void);
+bool cmd_get_last_error(void);
 
 #endif

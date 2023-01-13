@@ -25,6 +25,10 @@
 // dont usually care how long the setup program took
 #define RESET_CYCLE_NUMBER 1
 
+// Amount of virtual RAM in bytes - due to the naive way of searching RAM keep this value as
+// low as necessary
+#define RAM_SIZE 128
+
 // Determines whether to jump to the specified load segment before executing the load program,
 // or just let the address lines roll over.
 // Enables the JumpVector state.
@@ -84,6 +88,20 @@ static const char* MACHINE_STATE_STRINGS[] = {
   "Execute",
   "Store",
   "Done"
+};
+
+// Prefetch states
+typedef enum {
+  FETCH_IDLE = 0,
+  FETCH_SCHEDULED = 1,
+  FETCH_ABORT = 2,
+  FETCH_DELAY = 3,
+  FETCH_IN_PROGRESS = 4,
+  FETCH_CANCELLED = 5,
+} f_state;
+
+static const char FETCH_STATE_CHARS[] = {
+  ' ', 'S', 'A', 'D', ' ', 'C'
 };
 
 // Bus transfer states, as determined by status lines S0-S2.
@@ -162,6 +180,13 @@ typedef struct queue {
   u8 len;
 } queue;
 
+typedef struct {
+  u8 queue[2];
+  u8 front;
+  u8 back;
+  u8 len;
+} pf_queue;
+
 #define QUEUE_IDLE 0x00
 #define QUEUE_FIRST 0x01
 #define QUEUE_FLUSHED 0x02
@@ -201,9 +226,11 @@ typedef struct cpu {
   machine_state v_state;
   u32 state_begin_time;
   u32 address_latch;
-  s_state cycle_state; // Cycle state is bus state latched on T1
+  s_state mcycle_state; // Cycle state is bus state latched on T1
   s_state bus_state; // Bus state is current status of S0-S2 at given cycle (may not be valid)
   t_cycle bus_cycle;
+  u32 transfer_n; // Number of consecutive memory transfers for the current operation.
+  u8 op_width; // Width of the current instruction (0==Byte/1==Word)
   u8 data_bus;
   u8 data_type;
   u8 status0; // S0-S5, QS0 & QS1
@@ -215,6 +242,11 @@ typedef struct cpu {
   registers post_regs; // Register state retrieved from Store program
   u8 *readback_p;
   queue queue; // Instruction queue
+  pf_queue pf_stack; // Prefetch operation stack 
+  u32 pf_scheduled_id; // Unique identifier for next scheduled prefetch operation
+  f_state fetch_state; // Prefetch state
+  bool fetch_scheduled; // A fetch has been scheduled / used for prefetch abort detection
+  u8 fetch_delay; // Fetch delay cycles
   u8 opcode; // Currently executing opcode
   u8 qb; // Last byte value read from queue
   u8 qt; // Last data type read from queue
@@ -379,6 +411,10 @@ static const u8 BIT_REVERSE_TABLE[256] =
     R6(0), R6(2), R6(1), R6(3)
 };
 
+// Bit used to indicate that an entry in RAM has been written to
+#define RAM_WRITE_FLAG 0x80000000
+#define RAM_ADDR_MASK 0x7FFFFFFF
+
 // --------------------- Function declarations --------------------------------
 u32 calc_flat_address(u16 seg, u16 offset);
 
@@ -389,11 +425,14 @@ u8 data_bus_read();
 void latch_address();
 void read_status0();
 
-
 void init_queue();
 void push_queue(u8 byte, u8 dtype);
 void pop_queue(u8 *byte, u8 *dtype);
 void empty_queue();
 void print_queue();
+
+void init_pf_stack();
+void push_pf_stack(u32 id);
+u32 pop_pf_stack();
 
 #endif 

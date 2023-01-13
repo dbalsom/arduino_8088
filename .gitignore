@@ -1,7 +1,8 @@
 # General
 /images/
 /notes/
-
+/traces/
+/asm/*.bin
 
 # Arduino stuff
 
@@ -23,6 +24,7 @@ Arduino_Pro_Mini_Socket.kicad_mod
 Arduino_Uno_Shield.kicad_mod
 Arduino_Zero_Shield.kicad_mod
 Pro_Mini_Clone_Socket.kicad_mod
+/kicad/ard8088-backups/
 
 # Rust stuff
 

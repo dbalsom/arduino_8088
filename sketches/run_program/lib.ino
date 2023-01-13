@@ -170,6 +170,38 @@ void test_queue() {
   print_queue();
 }
 
+// ---------------------------- Prefetch op stack -----------------------------
+void init_pf_stack() {
+  CPU.pf_stack.len = 0;
+  CPU.pf_stack.back = 0;
+  CPU.pf_stack.front = 0;
+}
+
+void push_pf_stack(u32 id) {
+  if(CPU.pf_stack.len < 2) {
+    CPU.pf_stack.queue[CPU.pf_stack.front] = id;
+    CPU.pf_stack.front = (CPU.pf_stack.front + 1) & 0x01;
+    CPU.pf_stack.len++;
+  }
+  else {
+    Serial.println("## Prefetch scheduler overflow ##");
+  }
+}
+
+u32 pop_pf_stack() {
+  u32 id = 0;
+  if(CPU.pf_stack.len > 0) {
+    id = CPU.pf_stack.queue[CPU.pf_stack.back];
+    CPU.pf_stack.back = (CPU.pf_stack.back + 1) & 0x01;
+    CPU.pf_stack.len--;
+    return id;
+  }
+  else {
+    Serial.println("## Prefetch scheduler underflow ##");
+    return 0;
+  }
+}
+
 // ----------------------------------Opcodes-----------------------------------
 
 // Return the mnemonic name for the specified opcode. If the opcode is a group
