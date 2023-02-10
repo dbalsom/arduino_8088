@@ -1,5 +1,5 @@
 # Arduino8088
-![arduino8088_breadboard](https://user-images.githubusercontent.com/7229541/209396049-f9116dec-0f06-4541-83ff-b4afb083ceb2.jpg)
+![arduino8088_pcb](https://user-images.githubusercontent.com/7229541/217981230-db9d45e3-1733-4521-9f44-7010e94fcdd5.jpg)
 
 This project expands on the basic idea of controlling an Intel 8088 CPU via GPIO pins to clock the CPU and read and write control and data signals.
 This can be used to validate an emulator's accuracy, but also as a general method of exploring the operation of 8088 instructions and timings.
@@ -39,9 +39,7 @@ Additionally there is a sketch, run_program, that will take any user-supplied re
 ## PCB
 ![pcb_shield50](https://user-images.githubusercontent.com/7229541/209396773-b776a14a-baaf-46df-903d-24367d3a043c.PNG)
 
-I have developed an IO shield PCB for the Arduino MEGA as well that will accept sockets for the 8088 CPU and 8288 bus controller. KiCad project files are supplied.
+KiCad project files for the PCB are supplied. 
 
 In theory the board could also support an 8086 CPU, although the sketches would need to be modified to read all 16 data bus lines. As my main interest is in emulation of the original IBM PC, I don't have any immediate plans to do so, but if there's any interest in this support, let me know.
-
-NOTE: Do not order this PCB, it is untested as of yet. I will update this when I have received my first run of PCBs from the manufacturer.
 
