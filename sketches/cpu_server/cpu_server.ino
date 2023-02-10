@@ -89,13 +89,15 @@ command_func V_TABLE[] = {
   &cmd_read_data_bus,
   &cmd_write_data_bus,
   &cmd_finalize,
+  &cmd_begin_store,
   &cmd_store,
   &cmd_queue_len,
   &cmd_queue_bytes,
   &cmd_write_pin,
   &cmd_read_pin,
   &cmd_get_program_state,
-  &cmd_get_last_error
+  &cmd_get_last_error,
+  &cmd_get_cycle_status
 };
 
 char LAST_ERR[MAX_ERR_LEN] = {0};
@@ -104,20 +106,23 @@ char LAST_ERR[MAX_ERR_LEN] = {0};
 void setup() {
   Serial.begin(BAUD_RATE);
 
+  // Set all output pins to OUTPUT
   for( int p = 0; p < (sizeof OUTPUT_PINS / sizeof OUTPUT_PINS[0]); p++ ) {
     pinMode(OUTPUT_PINS[p], OUTPUT);
   }
-
+  // Set all input pins to INPUT
   for( int p = 0; p < (sizeof INPUT_PINS / sizeof INPUT_PINS[0]); p++ ) {
     pinMode(INPUT_PINS[p], INPUT);
   }
 
   // Default output pin states
+  digitalWrite(RQ_PIN, HIGH); // Don't allow other bus masters
   digitalWrite(READY_PIN, HIGH);
   digitalWrite(TEST_PIN, LOW);
-  // Must set these to a known value or risk spurious interrupts!
-  digitalWrite(INTR_PIN, LOW);
-  digitalWrite(NMI_PIN, LOW);  
+  digitalWrite(INTR_PIN, LOW); // Must set these to a known value or risk spurious interrupts!
+  digitalWrite(NMI_PIN, LOW);  // Must set these to a known value or risk spurious interrupts!
+  digitalWrite(AEN_PIN, LOW); // AEN is enable-low
+  digitalWrite(CEN_PIN, HIGH); // Command enable enables the outputs on the i8288
 
   // Wait for CPU to initialize
   delayMicroseconds(100);
@@ -125,8 +130,10 @@ void setup() {
   // Patch the reset vector jump
   patch_vector(JUMP_VECTOR, LOAD_SEG);
 
-  beep(100);
+  CPU.v_state = Reset;
+
   set_error("NO ERROR");
+  
   SERVER.c_state = WaitingForCommand;
 }
 
@@ -174,8 +181,11 @@ bool cmd_version() {
 // command will reset the CPU and set register state.
 bool cmd_reset() {
   bool result;
+  snprintf(LAST_ERR, MAX_ERR_LEN, "NO ERROR");
   result = cpu_reset();
-  change_state(Execute);
+  if(result) {
+    change_state(Execute);
+  }
   return result;
 }
 
@@ -195,11 +205,12 @@ bool cmd_cycle() {
 // AX, BX, CX, DX, SS, SP, FLAGS, IP, CS, DS, ES, BP, SI, DI
 bool cmd_load() {
 
-  debug("LOAD");
+  snprintf(LAST_ERR, MAX_ERR_LEN, "NO ERROR");
 
   // Sanity check
   if(SERVER.cmd_byte_n < sizeof LOAD_REGISTERS) {
-    debug("Not enough command bytes!");
+    //debug("Not enough command bytes!");
+    set_error("Not enough command bytes");
     return false;
   }
 
@@ -217,7 +228,6 @@ bool cmd_load() {
 
   bool result = cpu_reset();
   if(!result) {
-    debug("CPU failed to reset!");   
     return false;
   }
 
@@ -235,7 +245,7 @@ bool cmd_load() {
 
     if(load_ct > 300) {
       // Something went wrong in load program
-       debug("LOAD FAILED");
+       set_error("Load timeout");
        return false;
     }
   }
@@ -310,7 +320,6 @@ bool cmd_read_8288_control() {
 // Server command - ReadDataBus
 bool cmd_read_data_bus() {
   static char buf[3];
-  read_8288_control_bits();
   #if MODE_ASCII  
     snprintf(buf, 3, "%02X", CPU.data_bus);
     Serial.print(buf);
@@ -335,6 +344,11 @@ bool cmd_write_data_bus() {
 bool cmd_finalize() {
   if(CPU.v_state == Execute) {
     change_state(ExecuteFinalize);
+
+    // Wait for execute done state
+    while(CPU.v_state != ExecuteDone) {
+      cycle();
+    }
     return true;
   }
   else {
@@ -342,27 +356,45 @@ bool cmd_finalize() {
   }
 }
 
-// Server command - Store
-// Execute state must finalize before executing Store command!
+// Server command - BeginStore
+// Execute state must be in ExecuteDone before intiating BeginStore command
 //
-// Transitions to Store state and executes Store program to read back CPU register state.
-// Returns values of registers in the following order, little-endian
-// AX, BX, CX, DX, SS, SP, FLAGS, IP, CS, DS, ES, BP, SI, DI
-bool cmd_store(void) {
-
-
-  char err_msg[20];
+bool cmd_begin_store(void) {
+  /*
+  char err_msg[30];
 
   // Command only valid in ExecuteDone state
   if(CPU.v_state != ExecuteDone) {
-    snprintf(err_msg, 20, "Wrong state: %d ", CPU.v_state);
+    snprintf(err_msg, 30, "BeginStore: Wrong state: %d ", CPU.v_state);
     set_error(err_msg);
     return false;
   }
 
   change_state(Store);
-  while(CPU.v_state != Done) {
-    // TODO: Add timeout in case of no state change?
+  */
+  return true;
+}
+
+// Server command - Store
+// 
+// Returns values of registers in the following order, little-endian
+// AX, BX, CX, DX, SS, SP, FLAGS, IP, CS, DS, ES, BP, SI, DI
+// Execute state must be in StoreDone before executing Store command
+bool cmd_store(void) {
+
+  char err_msg[30];
+  // Command only valid in Store
+  if(CPU.v_state != ExecuteDone) {
+    snprintf(err_msg, 30, "Store: Wrong state: %d ", CPU.v_state);
+    error_beep();
+    set_error(err_msg);
+    return false;
+  }
+
+  change_state(Store);
+
+  // Cycle CPU until Store complete
+  while(CPU.v_state != StoreDone) {
     cycle();
   }
 
@@ -372,8 +404,10 @@ bool cmd_store(void) {
     Serial.write(reg_p[i]);
   }
 
+  change_state(Done);
   return true;
 }
+
 
 // Server command - QueueLen
 // Return the length of the instruction queue in bytes
@@ -403,7 +437,7 @@ bool cmd_write_pin(void) {
   if(pin_idx < sizeof WRITE_PINS) {
     u8 pin_no = WRITE_PINS[pin_idx];
 
-    switch(pin_idx) {
+    switch(pin_no) {
       case READY_PIN:
         WRITE_READY_PIN(pin_val);
         break;
@@ -421,12 +455,14 @@ bool cmd_write_pin(void) {
         break;
       
       default:
+        error_beep();
         return false;
     }
     return true;
   }
   else {
     // Invalid pin 
+    error_beep();
     return false;
   }
 }
@@ -448,6 +484,22 @@ bool cmd_get_program_state(void) {
 bool cmd_get_last_error(void) {
   Serial.write(LAST_ERR);
   return true;
+}
+
+// Server command - Get Cycle Status
+// A combination of all the status info typically needed for a single cycle
+// Returns 4 bytes
+bool cmd_get_cycle_status(void) {
+  read_status0();
+  read_8288_command_bits();
+  read_8288_control_bits();
+  u8 byte0 = ((u8)CPU.v_state & 0x0F) << 4;
+  byte0 |= (CPU.control_bits & 0x0F);
+
+  Serial.write(byte0);
+  Serial.write(CPU.status0);
+  Serial.write(CPU.command_bits);
+  Serial.write(CPU.data_bus);
 }
 
 void patch_vector(u8 *vec, u16 seg) {
@@ -647,6 +699,10 @@ void change_state(machine_state new_state) {
       // specific members. 
       CPU.readback_p = (u8 *)&CPU.post_regs;      
       break;
+    case StoreDone:
+      break;
+    case Done:
+      break;
   }
 
   u32 state_end_time = micros();
@@ -670,7 +726,8 @@ void change_state(machine_state new_state) {
 void cycle() {
 
   clock_tick();
-  
+  read_status0();
+
   CYCLE_NUM++;
   if(CYCLE_NUM == 0) {
     // overflow
@@ -891,10 +948,6 @@ void cycle() {
         }
       }
 
-      if(CPU.q_ff) {
-        beep(5);
-      }
-
       if(CPU.q_ff && (CPU.qt == DATA_PROGRAM_END)) {
         // We read a flagged NOP, meaning the previous instruction has completed and it is safe to 
         // execute the Store routine.
@@ -910,6 +963,8 @@ void cycle() {
     case Store:
       // We are executing the Store program.
 
+      //set_error("We are in Store");
+      
       if(!READ_MRDC_PIN) {
         // CPU is reading
         
@@ -951,6 +1006,8 @@ void cycle() {
             Serial.print("##: ");
             Serial.println(CPU.address_latch, HEX);
           #endif
+          set_error("Invalid store write");
+          // TODO: handle error gracefully
         }
         #if DEBUG_STORE
           Serial.print("## Store memory write: ");
@@ -962,15 +1019,6 @@ void cycle() {
       // We structured the register struct in the right order, so we can overwrite it
       // with raw u8s.
       if(!READ_IOWC_PIN) {
-        CPU.data_bus = data_bus_read();
-
-        *CPU.readback_p = CPU.data_bus;
-        CPU.readback_p++;
-
-        #if DEBUG_STORE
-          Serial.print("## Store IO write: ");
-          Serial.println(CPU.data_bus, HEX);
-        #endif
 
         if(CPU.address_latch == 0xFD) {
           // Write to 0xFD indicates end of store procedure.
@@ -981,9 +1029,24 @@ void cycle() {
             Serial.println(CPU.post_regs.ip, HEX);
           #endif            
           CPU.post_regs.ip -= 0x24;
-          change_state(Done);
+          
+          change_state(StoreDone);
+        }
+        else {
+          CPU.data_bus = data_bus_read();
+
+          *CPU.readback_p = CPU.data_bus;
+          CPU.readback_p++;
+
+          #if DEBUG_STORE
+            Serial.print("## Store IO write: ");
+            Serial.println(CPU.data_bus, HEX);
+          #endif
         }
       }
+
+    case StoreDone:
+      break;
 
     break;
   }

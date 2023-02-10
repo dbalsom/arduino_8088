@@ -3,6 +3,7 @@
 /notes/
 /traces/
 /asm/*.bin
+/sketches/convert_me/
 
 # Arduino stuff
 
@@ -25,6 +26,9 @@ Arduino_Uno_Shield.kicad_mod
 Arduino_Zero_Shield.kicad_mod
 Pro_Mini_Clone_Socket.kicad_mod
 /kicad/ard8088-backups/
+\#auto_saved_files#
+_autosave*
+gerbers/
 
 # Rust stuff
 

@@ -19,7 +19,7 @@
 #ifndef _ARDUINO8088_H
 #define _ARDUINO8088_H
 
-#define BAUD_RATE 460800
+#define BAUD_RATE 1000000
 
 // Determines if the cycle count is reset to 0 on entering Execute state. Recommended as we 
 // dont usually care how long the setup program took
@@ -67,7 +67,7 @@ typedef enum {
 } machine_state;
 
 // These defines control cycle status output for each state.
-#define TRACE_RESET 0
+#define TRACE_RESET 1
 #define TRACE_VECTOR 0
 #define TRACE_LOAD 0
 #define TRACE_PREFETCH 0
@@ -295,6 +295,8 @@ const u16 CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 // a subsequent read/write may fail.
 #define PIN_CHANGE_DELAY 4
 
+// ------------------------- CPU Control pins ---------------------------------
+
 // Clock line #4 is controlled by PORTG bit #5.
 const int CLK_PIN = 4;
 #define SET_CLOCK_LOW PORTG &= ~0x20
@@ -304,10 +306,6 @@ const int CLK_PIN = 4;
 const int RESET_PIN = 5;
 #define SET_RESET_LOW PORTE &= ~0x08
 #define SET_RESET_HIGH PORTE |= 0x08
-
-const int READY_PIN = 6;
-const int TEST_PIN = 7;
-
 
 // -------------------------- CPU Input pins ----------------------------------
 
@@ -330,6 +328,15 @@ const int TEST_PIN = 7;
 // NMI pin #13 is written to by PORTB bit #7
 #define NMI_PIN 13
 #define WRITE_NMI_PIN(x) (PORTB |= ((x) << 7))
+
+// --------------------------8288 Control Inputs ------------------------------
+#define AEN_PIN 54
+#define READ_AEN_PIN ((PINF & 0x01) != 0)
+#define WRITE_AEN_PIN(x) ((PINF |= x)
+
+#define CEN_PIN 55
+#define READ_CEN_PIN ((PINF & 0x02) != 0)
+#define WRITE_CEN_PIN(x) ((PINF |= ((x) << 1))
 
 // --------------------------8288 Control lines -------------------------------
 // ALE pin #50 is read by PINB bit #3
@@ -391,13 +398,15 @@ const int OUTPUT_PINS[] = {
   7,  // TEST
   12, // INTR
   13, // NMI
+  54, // AEN
+  55, // CEN
 };
 
 // All input pins, used to set pin direction on setup
 const int INPUT_PINS[] = {
-  14,15,16,
+  8,9,10,11,14,15,16,
   23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,
-  43,44,45,46,47,48,49,50,51,52,53
+  43,44,45,46,47,48,49,50,51,52,53,
 };
 
 unsigned long CYCLE_NUM = 0;

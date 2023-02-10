@@ -106,7 +106,9 @@ void read_8288_control_bits() {
 // Resets the CPU by asserting RESET line for at least 4 cycles and waits for ALE signal.
 bool cpu_reset() {
 
-  CYCLE_NUM_H = 0;
+  memset(&CPU, 0, sizeof CPU);
+
+  //CYCLE_NUM_H = 0;
   CYCLE_NUM = 0;
   bool ale_went_off = false;
   CPU.state_begin_time = 0;
@@ -118,15 +120,15 @@ bool cpu_reset() {
   SET_RESET_HIGH;
 
   for (int i = 0; i < RESET_HOLD_CYCLE_COUNT; i++) {
-
-    if(READ_ALE_PIN == false) {
+    if (READ_ALE_PIN == false) {
       ale_went_off = true;
     }
     clock_tick();
   }
 
   // CPU didn't reset for some reason.
-  if(ale_went_off == false) {
+  if (ale_went_off == false) {
+    //set_error("CPU failed to reset: ALE not off!");   
     return false;
   }
 
@@ -136,18 +138,20 @@ bool cpu_reset() {
   int ale_cycles = 0;
 
   // Reset takes 7 cycles, bit we can try for longer
-  for( int i = 0; i < RESET_CYCLE_TIMEOUT; i++ ) {
-    cycle();
+  for ( int i = 0; i < RESET_CYCLE_TIMEOUT; i++ ) {
+    //cycle();
+    clock_tick();
     ale_cycles++;      
 
-    if(READ_ALE_PIN) {
+    if (READ_ALE_PIN) {
       // ALE is active! CPU has successfully reset
       CPU.doing_reset = false;
       return true;
     }
   }
 
-  // ALE did not turn on within the specified cycle timeout, so we failed to reset the  cpu.
+  // ALE did not turn on within the specified cycle timeout, so we failed to reset the cpu.
+  //set_error("CPU failed to reset: No ALE!");   
   return false;
 }
 
@@ -254,6 +258,14 @@ void beep(u32 time) {
   delay(time);
   BUZZER_OFF;
   */
+}
+
+void error_beep() {
+  beep(100);
+  delay(100);
+  beep(100);
+  delay(100);
+  beep(100);
 }
 
 // ----------------------------------Opcodes-----------------------------------

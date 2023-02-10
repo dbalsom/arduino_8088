@@ -42,7 +42,7 @@ registers LOAD_REGISTERS = {
 
 // Write the program to execute here, to start at the provided CS:IP.
 const unsigned char CODE_SEGMENT[] = {  
-  0xEA, 0x5B, 0xE0, 0x00, 0xF0, 0xFA, 0xB4, 0xD5, 0x9E, 0x73, 0x4A
+  0xB8, 0x00, 0x80, 0xF7, 0xD8
   //0xFF, 0x20, 0x90, 0x90
   //0x40, 0x40, 0x40, 0x40, 0x90, 0x90, 0x90
 };
@@ -144,11 +144,12 @@ void setup() {
   }
 
   // Default output pin states
-  digitalWrite(READY_PIN, HIGH);
+  digitalWrite(READY_PIN, HIGH); // Ready is always high for now - todo: simulate wait states?
   digitalWrite(TEST_PIN, LOW);
-  // Must set these to a known value or risk spurious interrupts!
-  digitalWrite(INTR_PIN, LOW);
-  digitalWrite(NMI_PIN, LOW);  
+  digitalWrite(INTR_PIN, LOW); // Must set these to a known value or risk spurious interrupts!
+  digitalWrite(NMI_PIN, LOW);  // Must set these to a known value or risk spurious interrupts!
+  digitalWrite(AEN_PIN, LOW); // AEN is enable-low
+  digitalWrite(CEN_PIN, HIGH); // Command enable enables the outputs on the i8288
 
   // Wait for CPU to initialize
   delayMicroseconds(100);
@@ -637,6 +638,7 @@ void cycle() {
           }
           else {
             Serial.println("## Error: Invalid Queue Length++ ##");
+            CPU.v_state = Done;
           }
 
           if(CPU.fetch_state != FETCH_SCHEDULED && CPU.fetch_state != FETCH_DELAY) {
@@ -1175,14 +1177,14 @@ bool cpu_reset() {
 
   for (int i = 0; i < RESET_HOLD_CYCLE_COUNT; i++) {
 
-    if(READ_ALE_PIN == false) {
+    if (READ_ALE_PIN == false) {
       ale_went_off = true;
     }
     clock_tick();
   }
 
   // CPU didn't reset for some reason.
-  if(ale_went_off == false) {
+  if (ale_went_off == false) {
     return false;
   }
 
@@ -1198,8 +1200,8 @@ bool cpu_reset() {
   u8 q = 0;
 
   // Reset should only take 7 cycles, bit we can try for longer
-  for( int i = 0; i < RESET_CYCLE_TIMEOUT; i++ ) {
-    cycle();
+  for ( int i = 0; i < RESET_CYCLE_TIMEOUT; i++ ) {
+    //cycle();
     ale_cycles++;      
 
     /*
@@ -1211,28 +1213,14 @@ bool cpu_reset() {
     }
     */
 
-    if(READ_ALE_PIN) {
+    if (READ_ALE_PIN) {
       // ALE is active! CPU has successfully reset
       CPU.doing_reset = false;
       return true;
     }
   }
 
-  /*
-  unsigned long start_time = micros();
-  while((READ_ALE_PIN == false)) {
-  }
-  unsigned long end_time = micros();
-  unsigned long elapsed = end_time - start_time;
-
-  Serial.print("ALE took: ");
-  Serial.print(elapsed);
-  Serial.print("us (");
-  Serial.print(ale_cycles);
-  Serial.println("cycles)");
-  */
-
-  // ALE did not turn on within the specified cycle timeout, so we failed to reset the  cpu.
+  // ALE did not turn on within the specified cycle timeout, so we failed to reset the cpu.
   return false;
 }
 
@@ -1263,6 +1251,7 @@ void loop() {
       }
       else {
         Serial.println("Failed to reset CPU.");
+        CPU.v_state = Done;
       }
       tried_reset = true;
     }

@@ -19,7 +19,8 @@
 #ifndef _CPU_SERVER_H
 #define _CPU_SERVER_H
 
-#define BAUD_RATE 460800
+#define BAUD_RATE 1000000
+//#define BAUD_RATE 460800
 
 #define CMD_TIMEOUT 100 // Command timeout in milliseconds
 #define MAX_COMMAND_BYTES 28 // Maximum length of command parameter input
@@ -52,14 +53,16 @@ typedef enum {
   CmdReadDataBus     = 0x09,
   CmdWriteDataBus    = 0x0A,
   CmdFinalize        = 0x0B,
-  CmdStore           = 0x0C,
-  CmdQueueLen        = 0x0D,
-  CmdQueueBytes      = 0x0E,
-  CmdWritePin        = 0x0F,
-  CmdReadPin         = 0x10,
-  CmdGetProgramState = 0x11,
-  CmdLastError       = 0x12,
-  CmdInvalid         = 0x13,
+  CmdBeginStore      = 0x0C,
+  CmdStore           = 0x0D,
+  CmdQueueLen        = 0x0E,
+  CmdQueueBytes      = 0x0F,
+  CmdWritePin        = 0x10,
+  CmdReadPin         = 0x11,
+  CmdGetProgramState = 0x12,
+  CmdLastError       = 0x13,
+  CmdGetCycleStatus  = 0x14,
+  CmdInvalid         = 0x15,
   
 } server_command;
 
@@ -82,6 +85,7 @@ const u8 CMD_ALIASES[] = {
   'r', // CmdReadDataBus
   'w', // CmdWriteDataBus,
   'z', // CmdFinalize
+  'm', // CmdBeginStore,
   'v', // CmdStore,
   'q', // CmdQueueLen,
   'b', // CmdQueueBytes,
@@ -89,6 +93,7 @@ const u8 CMD_ALIASES[] = {
   'y', // CmdReadPin,
   'g', // CmdGetProgramState
   'e', // CmdGetLastError
+  'f', // CmdGetCycleStatus
   0 // CmdInvalid
 };
 
@@ -97,7 +102,6 @@ const u8 CMD_ALIASES[] = {
 const u8 WRITE_PINS[] = {
   6,  // READY
   7,  // TEST
-  10,  // !LOCK
   12, // INTR
   13, // NMI
 };
@@ -116,6 +120,7 @@ const u8 CMD_INPUTS[] = {
   0,  // CmdReadDataBus 
   1,  // CmdWriteDataBus
   0,  // CmdFinalize
+  0,  // CmdBeginStore,
   0,  // CmdStore,
   0,  // CmdQueueLen,
   0,  // CmdQueueBytes,
@@ -123,6 +128,7 @@ const u8 CMD_INPUTS[] = {
   1,  // CmdReadPin,
   0,  // CmdGetProgramState,
   0,  // CmdGetLastError,
+  0,  // CmdGetCycleStatus,
   0   // CmdInvalid
 };
 
@@ -151,6 +157,7 @@ bool cmd_read_8288_control(void);
 bool cmd_read_data_bus(void);
 bool cmd_write_data_bus(void);
 bool cmd_finalize(void);
+bool cmd_begin_store(void);
 bool cmd_store(void);
 bool cmd_queue_len(void);
 bool cmd_queue_bytes(void);
@@ -158,5 +165,6 @@ bool cmd_write_pin(void);
 bool cmd_read_pin(void);
 bool cmd_get_program_state(void);
 bool cmd_get_last_error(void);
+bool cmd_get_cycle_status(void);
 
 #endif

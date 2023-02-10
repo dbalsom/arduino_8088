@@ -54,6 +54,7 @@ typedef enum {
   ExecuteFinalize,
   ExecuteDone,
   Store,
+  StoreDone,
   Done
 } machine_state;
 
@@ -79,6 +80,7 @@ const char* MACHINE_STATE_STRINGS[] = {
   "ExecuteFinalize",
   "ExecuteDone",
   "Store",
+  "StoreDone",
   "Done"
 };
 
@@ -248,9 +250,9 @@ const u16 CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 #define PIN_CHANGE_DELAY 4
 
 // -----------------------------Buzzer ----------------------------------------
-#define BUZZER_PIN 3
-#define BUZZER_ON PORTE |= BIT1
-#define BUZZER_OFF PORTE &= ~BIT1
+#define BUZZER_PIN 2
+#define BUZZER_ON PORTE |= BIT0
+#define BUZZER_OFF PORTE &= ~BIT0
 
 // ------------------------- CPU Control pins ---------------------------------
 
@@ -285,6 +287,19 @@ const int RESET_PIN = 5;
 // NMI pin #13 is written to by PORTB bit #7
 #define NMI_PIN 13
 #define WRITE_NMI_PIN(x) (PORTB |= ((x) << 7))
+
+// -------------------------- CPU Output pins ---------------------------------
+#define RQ_PIN 3
+
+
+// --------------------------8288 Control Inputs ------------------------------
+#define AEN_PIN 54
+#define READ_AEN_PIN ((PINF & 0x01) != 0)
+#define WRITE_AEN_PIN(x) ((PINF |= x)
+
+#define CEN_PIN 55
+#define READ_CEN_PIN ((PINF & 0x02) != 0)
+#define WRITE_CEN_PIN(x) ((PINF |= ((x) << 1))
 
 // --------------------------8288 Control lines -------------------------------
 // ALE pin #50 is read by PINB bit #3
@@ -345,12 +360,14 @@ const int OUTPUT_PINS[] = {
   6,  // READY
   7,  // TEST
   12, // INTR
-  13, // NMI
+  13, // NMI,
+  54, // AEN,
+  55, // CEN
 };
 
 // All input pins, used to set pin direction on setup
 const int INPUT_PINS[] = {
-  8,9,10,11,14,15,16,
+  3,8,9,10,11,14,15,16,
   23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,
   43,44,45,46,47,48,49,50,51,52,53
 };
