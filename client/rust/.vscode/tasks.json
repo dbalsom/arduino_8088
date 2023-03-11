@@ -1,0 +1,49 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+        {
+            "label": "Cargo Build",
+            "type": "shell",
+            "command": "cargo",
+            "args": [
+                "build"
+            ],
+            "windows": {
+                "args": [
+                    "build",
+                ]
+            },
+            "options": {
+                "cwd": "${workspaceRoot}"
+            },
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": {
+                "kind": "build"
+            }
+        },		
+		{
+			"label": "build program.asm",
+			"type": "shell",
+			"windows": {
+				"command": ".\\scripts\\build.bat",
+                "args": [
+                    "program"
+                ],                
+			},
+			"group": "build"
+        },
+		{
+			"label": "build testcyc.asm",
+			"type": "shell",
+			"windows": {
+				"command": ".\\scripts\\build.bat",
+                "args": [
+                    "testcyc"
+                ],
+			},
+			"group": "build"
+		}        
+	]
+}
