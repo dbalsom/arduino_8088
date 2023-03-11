@@ -86,7 +86,7 @@ const u8 CMD_ALIASES[] = {
   'w', // CmdWriteDataBus,
   'z', // CmdFinalize
   'm', // CmdBeginStore,
-  'v', // CmdStore,
+  'w', // CmdStore,
   'q', // CmdQueueLen,
   'b', // CmdQueueBytes,
   'x', // CmdWritePin,
