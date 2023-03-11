@@ -132,6 +132,7 @@ void setup() {
 
   CPU.v_state = Reset;
 
+  beep(100);
   set_error("NO ERROR");
   
   SERVER.c_state = WaitingForCommand;
