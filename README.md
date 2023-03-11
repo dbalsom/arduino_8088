@@ -36,6 +36,8 @@ The main Arduino8088 sketch, cpu_server, operates a simple binary serial protoco
 
 Additionally there is a sketch, run_program, that will take any user-supplied register state and array of instruction bytes defined in the source code, execute it, and print cycle traces and final register state. This is useful for investigating the timing and operation of certain instructions without needing any external software integrations, however it is restricted in the number of memory reads or writes it can support, due to the limited RAM on the Arduino (8k!)
 
+An example client for cpu_server is provded, written in Rust, in the client directory. It demonstrates how to upload arbitrary code to the Arduino8088 and display cycle traces. The client will emulate the entire address space and set up a basic IVT.
+
 ## PCB
 ![pcb_shield50](https://user-images.githubusercontent.com/7229541/209396773-b776a14a-baaf-46df-903d-24367d3a043c.PNG)
 
