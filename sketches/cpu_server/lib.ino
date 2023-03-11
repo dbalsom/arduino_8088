@@ -89,7 +89,7 @@ void read_8288_command_bits() {
   CPU.command_bits |= ((PINL & BIT3) >> 3) << 3; // IORC - Pin 46 (L3)
   CPU.command_bits |= ((PINL & BIT1) >> 1) << 4; // AIOWC- Pin 48 (L1)
   CPU.command_bits |= ((PINL & BIT2) >> 2) << 5; // IOWC - Pin 47 (L2)
-  CPU.command_bits |= ((PINL & PIN4) >> 4) << 6; // INTA - Pin 45 (L4)
+  CPU.command_bits |= ((PINL & BIT4) >> 4) << 6; // INTA - Pin 45 (L4)
   // Although not technically a command status, we have an extra bit, so we can stick ALE in here.
   CPU.command_bits |= ((PINB & BIT3) >> 3) << 7; // ALE  - Pin 50 (B3)
 }
@@ -105,6 +105,10 @@ void read_8288_control_bits() {
 
 // Resets the CPU by asserting RESET line for at least 4 cycles and waits for ALE signal.
 bool cpu_reset() {
+
+  digitalWrite(TEST_PIN, LOW);
+  digitalWrite(INTR_PIN, LOW); 
+  digitalWrite(NMI_PIN, LOW);
 
   memset(&CPU, 0, sizeof CPU);
 
