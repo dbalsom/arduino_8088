@@ -42,14 +42,15 @@ registers LOAD_REGISTERS = {
 
 // Write the program to execute here, to start at the provided CS:IP.
 const unsigned char CODE_SEGMENT[] = {  
-  0xB8, 0x00, 0x80, 0xF7, 0xD8
+  //0xB0, 0xA7, 0x2C, 0xD0 // mov al, 0xa7; sub al, 0xd0
+  0xF9, 0xB0, 0xA7, 0x1C, 0xCF, // stc, mov al, 0xa7; sbb al, 0xcf
   //0xFF, 0x20, 0x90, 0x90
   //0x40, 0x40, 0x40, 0x40, 0x90, 0x90, 0x90
 };
 
 // Specify how many bytes of CODE_SEGMENT to have prefetched before execution begins
 // This value must be <= the length of CODE_SEGMENT
-size_t PREFETCH_LEN = 0;
+size_t PREFETCH_LEN = 4;
 
 // -----------------------End User-provided state -----------------------------
 
@@ -144,6 +145,7 @@ void setup() {
   }
 
   // Default output pin states
+  digitalWrite(RQ_PIN, HIGH); // Don't allow other bus masters
   digitalWrite(READY_PIN, HIGH); // Ready is always high for now - todo: simulate wait states?
   digitalWrite(TEST_PIN, LOW);
   digitalWrite(INTR_PIN, LOW); // Must set these to a known value or risk spurious interrupts!
@@ -156,6 +158,8 @@ void setup() {
 
   // Patch the reset vector jump
   patch_vector(JUMP_VECTOR, LOAD_SEG);
+
+  CPU.v_state = Reset;
 
   // Prefetch request setup
   // Don't allow PREFETCH_LEN > CODE_SEGMENT
@@ -1201,7 +1205,7 @@ bool cpu_reset() {
 
   // Reset should only take 7 cycles, bit we can try for longer
   for ( int i = 0; i < RESET_CYCLE_TIMEOUT; i++ ) {
-    //cycle();
+    cycle();
     ale_cycles++;      
 
     /*
