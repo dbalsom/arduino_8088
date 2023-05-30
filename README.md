@@ -12,7 +12,7 @@ One disadvantage to this approach may be speed - in theory the Raspberry Pi's GP
 
 The main advantage is that this allows CPU hardware validation to occur on a regular PC, which helps me out since the Raspberry Pi and the UI library I use for my emulator do not cooperate. Another advantage is that the Arduino GPIO pins operate at the 8088's desired voltage of +5V. This may improve compatibility.
 
-I have been using this project to validate the cycle-accuracy of my PC emulator, Marty: https://github.com/dbalsom/marty 
+I have been using this project to validate the cycle-accuracy of my PC emulator, MartyPC: https://github.com/dbalsom/martypc 
 
 ## Can the CPU be clocked fast enough?
 
