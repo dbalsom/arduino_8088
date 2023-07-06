@@ -1,7 +1,7 @@
 # Arduino8088
 ![arduino8088_pcb](https://user-images.githubusercontent.com/7229541/217981230-db9d45e3-1733-4521-9f44-7010e94fcdd5.jpg)
 
-### About
+### About Arduino8088
 I've writtten a blog article that gives an overview of this project and how it is used.
 
 https://martypc.blogspot.com/2023/06/hardware-validating-emulator.html
