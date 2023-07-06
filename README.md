@@ -1,11 +1,16 @@
 # Arduino8088
 ![arduino8088_pcb](https://user-images.githubusercontent.com/7229541/217981230-db9d45e3-1733-4521-9f44-7010e94fcdd5.jpg)
 
+### About
+I've writtten a blog article that gives an overview of this project and how it is used.
+
+https://martypc.blogspot.com/2023/06/hardware-validating-emulator.html
+
+### Description
+
 This project expands on the basic idea of controlling an Intel 8088 CPU via GPIO pins to clock the CPU and read and write control and data signals.
 This can be used to validate an emulator's accuracy, but also as a general method of exploring the operation of 8088 instructions and timings.
 
-I've writtten a blog article that gives an overview of this project and how it is used.
-https://martypc.blogspot.com/2023/06/hardware-validating-emulator.html
 
 Where it differs from Raspberry Pi based projects is that it uses an Arduino MEGA2560 to supply enough GPIO pins to operate the 8088 in Maximum mode without requiring any shifters. This enables several useful signals to be read such as the QS0 & QS1 processor instruction queue status lines, which give us more insight into the internal state of the CPU. We can also enable inputs such as READY, NMI, INTR, and TEST, so we can in theory execute interrupts, emulate wait states, and perhaps simulate FPU and DMA operations.
 
