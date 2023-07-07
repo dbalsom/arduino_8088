@@ -19,6 +19,9 @@
 #ifndef _ARDUINO8088_H
 #define _ARDUINO8088_H
 
+#include <Arduino.h>
+#include <stdint.h>
+
 // Determines whether to jump to the specified load segment before executing the load program,
 // or just let the address lines roll over.
 // Enables the JumpVector state.
@@ -26,7 +29,7 @@
 #define USE_LOAD_SEG 1
 
 // Code segment to use for load program. User programs shouldn't jump here.
-const u16 LOAD_SEG = 0xD000;
+const uint16_t LOAD_SEG = 0xD000;
 
 // Maximum size of the processor instruction queue. For 8088 == 4, 8086 == 6. 
 #define QUEUE_MAX 4
@@ -71,7 +74,7 @@ const char MACHINE_STATE_CHARS[] = {
   'R', 'J', 'L', 'M', 'E', 'F', 'S', 'D'
 };
 
-const char* MACHINE_STATE_STRINGS[] = {
+const char* const MACHINE_STATE_STRINGS[] = {
   "Reset",
   "JumpVector",
   "Load",
@@ -97,7 +100,7 @@ typedef enum {
 } s_state;
 
 // Strings for printing bus states cycles.
-const char *BUS_STATE_STRINGS[] = {
+const char *const BUS_STATE_STRINGS[] = {
   "IRQA",
   "IOR ",
   "IOW ",
@@ -118,39 +121,39 @@ typedef enum {
 } t_cycle;
 
 // Strings for printing bus transfer cycles.
-const char *CYCLE_STRINGS[] = {
+const char *const CYCLE_STRINGS[] = {
   "t1", "t2", "t3", "t4", "tw"
 };
 
-const char *SEGMENT_STRINGS[] = {
+const char *const SEGMENT_STRINGS[] = {
   "ES", "SS", "CS", "DS"
 };
 
 // CPU Registers
 typedef struct registers {
-  u16 ax;
-  u16 bx;
-  u16 cx;
-  u16 dx;
-  u16 ss;
-  u16 sp;
-  u16 flags;
-  u16 ip;
-  u16 cs;
-  u16 ds;
-  u16 es;
-  u16 bp;
-  u16 si;
-  u16 di;
+  uint16_t ax;
+  uint16_t bx;
+  uint16_t cx;
+  uint16_t dx;
+  uint16_t ss;
+  uint16_t sp;
+  uint16_t flags;
+  uint16_t ip;
+  uint16_t cs;
+  uint16_t ds;
+  uint16_t es;
+  uint16_t bp;
+  uint16_t si;
+  uint16_t di;
 } registers __attribute__((packed)) ;
 
 // Processor instruction queue
 typedef struct queue {
-  u8 queue[QUEUE_MAX];
-  u8 types[QUEUE_MAX];
-  u8 front;
-  u8 back;
-  u8 len;
+  uint8_t queue[QUEUE_MAX];
+  uint8_t types[QUEUE_MAX];
+  uint8_t front;
+  uint8_t back;
+  uint8_t len;
 } queue;
 
 #define QUEUE_IDLE 0x00
@@ -174,38 +177,38 @@ const char QUEUE_STATUS_CHARS[] = {
 #define DATA_PROGRAM_END 0x01
 
 typedef struct program_stats {
-  u16 code_read_xfers;
-  u16 memory_read_xfers;
-  u16 memory_write_xfers;
-  u16 io_read_xfers;
-  u16 io_write_xfers;
-  u32 idle_cycles;
-  u32 program_cycles;
+  uint16_t code_read_xfers;
+  uint16_t memory_read_xfers;
+  uint16_t memory_write_xfers;
+  uint16_t io_read_xfers;
+  uint16_t io_write_xfers;
+  uint32_t idle_cycles;
+  uint32_t program_cycles;
 } p_stats;
 
 // Main CPU State
 typedef struct cpu {
   bool doing_reset;
   machine_state v_state;
-  u32 state_begin_time;
-  u32 address_latch;
+  uint32_t state_begin_time;
+  uint32_t address_latch;
   s_state transfer_state; // Transfer state is bus state latched on T1
   s_state bus_state; // Bus state is current status of S0-S2 at given cycle (may not be valid)
   t_cycle bus_cycle;
-  u8 data_bus;
-  u8 data_type;
-  u8 status0; // S0-S5, QS0 & QS1
-  u8 command_bits; // 8288 command outputs
-  u8 control_bits; // 8288 control outputs
-  u16 v_pc; // Virtual program counter
+  uint8_t data_bus;
+  uint8_t data_type;
+  uint8_t status0; // S0-S5, QS0 & QS1
+  uint8_t command_bits; // 8288 command outputs
+  uint8_t control_bits; // 8288 control outputs
+  uint16_t v_pc; // Virtual program counter
   registers post_regs; // Register state retrieved from Store program
-  u8 *readback_p;
+  uint8_t *readback_p;
   queue queue; // Instruction queue
-  u8 opcode; // Currently executing opcode
-  u8 qb; // Last byte value read from queue
-  u8 qt; // Last data type read from queue
+  uint8_t opcode; // Currently executing opcode
+  uint8_t qb; // Last byte value read from queue
+  uint8_t qt; // Last data type read from queue
   bool q_ff; // Did we fetch a first instruction byte from the queue this cycle?
-  u8 q_fn; // What # byte of instruction did we fetch?
+  uint8_t q_fn; // What # byte of instruction did we fetch?
 } Cpu;
 
 // How many cycles to hold the RESET signal high. Intel says "greater than 4" although 4 seems to work.
@@ -216,18 +219,18 @@ const int RESET_CYCLE_COUNT = 7;
 const int RESET_CYCLE_TIMEOUT = 14; 
 
 // ----------------------------- CPU FLAGS ----------------------------------//
-const u16 CPU_FLAG_CARRY      = 0b0000000000000001;
-const u16 CPU_FLAG_RESERVED1  = 0b0000000000000010;
-const u16 CPU_FLAG_PARITY     = 0b0000000000000100;
-const u16 CPU_FLAG_RESERVED3  = 0b0000000000001000;
-const u16 CPU_FLAG_AUX_CARRY  = 0b0000000000010000;
-const u16 CPU_FLAG_RESERVED5  = 0b0000000000100000;
-const u16 CPU_FLAG_ZERO       = 0b0000000001000000;
-const u16 CPU_FLAG_SIGN       = 0b0000000010000000;
-const u16 CPU_FLAG_TRAP       = 0b0000000100000000;
-const u16 CPU_FLAG_INT_ENABLE = 0b0000001000000000;
-const u16 CPU_FLAG_DIRECTION  = 0b0000010000000000;
-const u16 CPU_FLAG_OVERFLOW   = 0b0000100000000000;
+const uint16_t CPU_FLAG_CARRY      = 0b0000000000000001;
+const uint16_t CPU_FLAG_RESERVED1  = 0b0000000000000010;
+const uint16_t CPU_FLAG_PARITY     = 0b0000000000000100;
+const uint16_t CPU_FLAG_RESERVED3  = 0b0000000000001000;
+const uint16_t CPU_FLAG_AUX_CARRY  = 0b0000000000010000;
+const uint16_t CPU_FLAG_RESERVED5  = 0b0000000000100000;
+const uint16_t CPU_FLAG_ZERO       = 0b0000000001000000;
+const uint16_t CPU_FLAG_SIGN       = 0b0000000010000000;
+const uint16_t CPU_FLAG_TRAP       = 0b0000000100000000;
+const uint16_t CPU_FLAG_INT_ENABLE = 0b0000001000000000;
+const uint16_t CPU_FLAG_DIRECTION  = 0b0000010000000000;
+const uint16_t CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 
 #define CPU_FLAG_DEFAULT_SET 0xF002
 #define CPU_FLAG_DEFAULT_CLEAR 0xFFD7
@@ -373,12 +376,12 @@ const int INPUT_PINS[] = {
 };
 
 // High word of cycle count
-unsigned long CYCLE_NUM_H = 0;
+extern unsigned long CYCLE_NUM_H;
 // Low word of cycle count
-unsigned long CYCLE_NUM = 0;
+extern unsigned long CYCLE_NUM;
 
 // Bit reverse LUT from http://graphics.stanford.edu/~seander/bithacks.html#BitReverseTable
-static const u8 BIT_REVERSE_TABLE[256] = 
+static const uint8_t BIT_REVERSE_TABLE[256] = 
 {
 #   define R2(n)    n,     n + 2*64,     n + 1*64,     n + 3*64
 #   define R4(n) R2(n), R2(n + 2*16), R2(n + 1*16), R2(n + 3*16)
@@ -391,19 +394,19 @@ static const u8 BIT_REVERSE_TABLE[256] =
 #endif
 
 // --------------------- Function declarations --------------------------------
-u32 calc_flat_address(u16 seg, u16 offset);
+uint32_t calc_flat_address(uint16_t seg, uint16_t offset);
 
 void clock_tick();
-void data_bus_write(u8 byte);
-u8 data_bus_read();
+void data_bus_write(uint8_t byte);
+uint8_t data_bus_read();
 
 void latch_address();
 void read_status0();
 bool cpu_reset();
 
 void init_queue();
-void push_queue(u8 byte, u8 dtype);
-void pop_queue(u8 *byte, u8 *dtype);
+void push_queue(uint8_t byte, uint8_t dtype);
+void pop_queue(uint8_t *byte, uint8_t *dtype);
 void empty_queue();
 void print_queue();
 void read_queue();
