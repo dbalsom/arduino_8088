@@ -31,7 +31,7 @@
 #define IS_GRP_OP(O) ((OPCODE_REFS[O] >= GRP1) && (OPCODE_REFS[O] <= GRP2B))
 
 // LUT of primary opcode to Mnemonic (Or Group name)
-static const u8 OPCODE_REFS[] = {
+static const uint8_t OPCODE_REFS[] = {
  0, 0, 0, 0, 0, 0, 1, 2, 3, 3, 3, 3, 3, 3, 1, 2,
  4, 4, 4, 4, 4, 4, 1, 2, 5, 5, 5, 5, 5, 5, 1, 2,
  6, 6, 6, 6, 6, 6, 7, 8, 9, 9, 9, 9, 9, 9, 10, 11, 
@@ -50,7 +50,7 @@ static const u8 OPCODE_REFS[] = {
  85, 104, 86, 87, 89, 90, 107, 107, 97, 98, 99, 100, 101, 102, 108, 109 
 };
 
-static char *OPCODE_STRS[] = {
+static const char *OPCODE_STRS[] = {
   "ADD",
   "PUSH",
   "POP",
@@ -167,7 +167,7 @@ static char *OPCODE_STRS[] = {
 };
 
 // 0x80 - 0x81
-static char *OPCODE_STRS_GRP1[] = {
+static const char *OPCODE_STRS_GRP1[] = {
   "ADD",
   "OR",
   "ADC",
@@ -179,7 +179,7 @@ static char *OPCODE_STRS_GRP1[] = {
 };
 
 // 0xD0 - 0xD1
-static char *OPCODE_STRS_GRP2A[] = {
+static const char *OPCODE_STRS_GRP2A[] = {
   "ROL",
   "ROR",
   "RCL",
@@ -191,7 +191,7 @@ static char *OPCODE_STRS_GRP2A[] = {
 };
 
 // 0xD2 - 0xD3
-static char *OPCODE_STRS_GRP2B[] = {
+static const char *OPCODE_STRS_GRP2B[] = {
   "ROL",
   "ROR",
   "RCL",
@@ -203,7 +203,7 @@ static char *OPCODE_STRS_GRP2B[] = {
 };
 
 // 0xF6 - 0xF7
-static char *OPCODE_STRS_GRP3[] = {
+static const char *OPCODE_STRS_GRP3[] = {
   "TEST",
   "TEST",
   "NOT",
@@ -215,7 +215,7 @@ static char *OPCODE_STRS_GRP3[] = {
 };
 
 // 0xFE
-static char *OPCODE_STRS_GRP4[] = {
+static const char *OPCODE_STRS_GRP4[] = {
   "INC",
   "DEC",
   "INVAL",
@@ -227,7 +227,7 @@ static char *OPCODE_STRS_GRP4[] = {
 };
 
 // 0xFF
-static char *OPCODE_STRS_GRP5[] = {
+static const char *OPCODE_STRS_GRP5[] = {
   "INC",
   "DEC",
   "CALL",

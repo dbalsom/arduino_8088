@@ -18,10 +18,15 @@
 */
 #include "arduino8088.h"
 #include "cpu_server.h"
+#include "lib.h"
 #include "opcodes.h"
 
 static Server SERVER;
-static Cpu CPU;
+
+Cpu CPU;
+
+unsigned long CYCLE_NUM_H = 0;
+unsigned long CYCLE_NUM = 0;
 
 registers LOAD_REGISTERS = {
   0x0000, // AX
@@ -41,14 +46,14 @@ registers LOAD_REGISTERS = {
 };
 
 // Register load routine.
-u8 LOAD_PROGRAM[] = {
+uint8_t LOAD_PROGRAM[] = {
   0x00, 0x00, 0xB8, 0x00, 0x00, 0x8E, 0xD0, 0x89, 0xC4, 0x9D, 0xBB, 0x00, 0x00, 0xB9, 0x00, 0x00,
   0xBA, 0x00, 0x00, 0xB8, 0x00, 0x00, 0x8E, 0xD0, 0xB8, 0x00, 0x00, 0x8E, 0xD8, 0xB8, 0x00, 0x00,
   0x8E, 0xC0, 0xB8, 0x00, 0x00, 0x89, 0xC4, 0xB8, 0x00, 0x00, 0x89, 0xC5, 0xB8, 0x00, 0x00, 0x89,
   0xC6, 0xB8, 0x00, 0x00, 0x89, 0xC7, 0xB8, 0x00, 0x00, 0xEA, 0x00, 0x00, 0x00, 0x00
 };
 
-u8 JUMP_VECTOR[] = {
+uint8_t JUMP_VECTOR[] = {
   0xEA, 0x00, 0x00, 0x00, 0x00
 };
 
@@ -68,14 +73,14 @@ size_t LOAD_IP = 0x3A;
 size_t LOAD_CS = 0x3C;
 
 // Register store routine.
-const u8 STORE_PROGRAM[] = {
+const uint8_t STORE_PROGRAM[] = {
   0xE7, 0xFE, 0x89, 0xD8, 0xE7, 0xFE, 0x89, 0xC8, 0xE7, 0xFE, 0x89, 0xD0, 0xE7, 0xFE, 0x8C, 0xD0,
   0xE7, 0xFE, 0x89, 0xE0, 0xE7, 0xFE, 0xB8, 0x00, 0x00, 0x8E, 0xD0, 0xB8, 0x04, 0x00, 0x89, 0xC4,
   0x9C, 0xE8, 0x00, 0x00, 0x8C, 0xC8, 0xE7, 0xFE, 0x8C, 0xD8, 0xE7, 0xFE, 0x8C, 0xC0, 0xE7, 0xFE,
   0x89, 0xE8, 0xE7, 0xFE, 0x89, 0xF0, 0xE7, 0xFE, 0x89, 0xF8, 0xE7, 0xFE, 0xB0, 0xFF, 0xE6, 0xFD
 };
 
-u8 COMMAND_BUFFER[MAX_COMMAND_BYTES] = {0};
+uint8_t COMMAND_BUFFER[MAX_COMMAND_BYTES] = {0};
 
 command_func V_TABLE[] = {
   &cmd_version,
@@ -107,11 +112,11 @@ void setup() {
   Serial.begin(BAUD_RATE);
 
   // Set all output pins to OUTPUT
-  for( int p = 0; p < (sizeof OUTPUT_PINS / sizeof OUTPUT_PINS[0]); p++ ) {
+  for( unsigned p = 0; p < (sizeof OUTPUT_PINS / sizeof OUTPUT_PINS[0]); p++ ) {
     pinMode(OUTPUT_PINS[p], OUTPUT);
   }
   // Set all input pins to INPUT
-  for( int p = 0; p < (sizeof INPUT_PINS / sizeof INPUT_PINS[0]); p++ ) {
+  for( unsigned p = 0; p < (sizeof INPUT_PINS / sizeof INPUT_PINS[0]); p++ ) {
     pinMode(INPUT_PINS[p], INPUT);
   }
 
@@ -217,7 +222,7 @@ bool cmd_load() {
 
   // Write raw command bytes over register struct.
   // All possible bit representations are valid.
-  u8 *read_p = (u8 *)&LOAD_REGISTERS;
+  uint8_t *read_p = (uint8_t *)&LOAD_REGISTERS;
 
   for(size_t i = 0; i < sizeof LOAD_REGISTERS; i++ ) {
     *read_p++ = COMMAND_BUFFER[i];
@@ -258,9 +263,9 @@ bool cmd_load() {
 // Server command - ReadAddress
 // Read back the contents of the address latch as a sequence of 3 bytes (little-endian)
 bool cmd_read_address() {
-  static char buf[7];
-
   #if MODE_ASCII  
+    static char buf[7];
+
     //buf[0] = 0;
     snprintf(
       buf, 7, 
@@ -271,9 +276,9 @@ bool cmd_read_address() {
     );
     Serial.print(buf);
   #else
-    Serial.write((u8)(CPU.address_latch & 0xFF));
-    Serial.write((u8)((CPU.address_latch >> 8) & 0xFF));
-    Serial.write((u8)((CPU.address_latch >> 16) & 0xFF));
+    Serial.write((uint8_t)(CPU.address_latch & 0xFF));
+    Serial.write((uint8_t)((CPU.address_latch >> 8) & 0xFF));
+    Serial.write((uint8_t)((CPU.address_latch >> 16) & 0xFF));
   #endif
   return true;
 }
@@ -281,9 +286,9 @@ bool cmd_read_address() {
 // Server command - ReadStatus
 // Return the value of the CPU status lines S0-S5 and QS0-QS1
 bool cmd_read_status() {
-  static char buf[3];
   read_status0();
   #if MODE_ASCII  
+    static char buf[3];
     snprintf(buf, 3, "%02X", CPU.status0);
     Serial.print(buf);
   #else
@@ -294,9 +299,9 @@ bool cmd_read_status() {
 
 // Server command - Read8288Command
 bool cmd_read_8288_command() {
-  static char buf[3];
   read_8288_command_bits();
   #if MODE_ASCII  
+    static char buf[3];
     snprintf(buf, 3, "%02X", CPU.command_bits);
     Serial.print(buf);
   #else
@@ -307,9 +312,9 @@ bool cmd_read_8288_command() {
 
 // Server command - Read8288Control
 bool cmd_read_8288_control() {
-  static char buf[3];
   read_8288_control_bits();
   #if MODE_ASCII  
+    static char buf[3];
     snprintf(buf, 3, "%02X", CPU.control_bits);
     Serial.print(buf);
   #else
@@ -320,8 +325,8 @@ bool cmd_read_8288_control() {
 
 // Server command - ReadDataBus
 bool cmd_read_data_bus() {
-  static char buf[3];
   #if MODE_ASCII  
+    static char buf[3];
     snprintf(buf, 3, "%02X", CPU.data_bus);
     Serial.print(buf);
   #else
@@ -400,7 +405,7 @@ bool cmd_store(void) {
   }
 
   // Dump final register state to Serial port
-  u8 *reg_p = (u8 *)&CPU.post_regs;
+  uint8_t *reg_p = (uint8_t *)&CPU.post_regs;
   for(size_t i = 0; i < sizeof CPU.post_regs; i++ ) {
     Serial.write(reg_p[i]);
   }
@@ -414,7 +419,7 @@ bool cmd_store(void) {
 // Return the length of the instruction queue in bytes
 bool cmd_queue_len(void) {
 
-  Serial.write((u8)CPU.queue.len);
+  Serial.write((uint8_t)CPU.queue.len);
   return true;
 }
 
@@ -432,11 +437,11 @@ bool cmd_queue_bytes(void) {
 // Sets the value of the specified CPU input pin
 bool cmd_write_pin(void) {
 
-  u8 pin_idx = COMMAND_BUFFER[0];
-  u8 pin_val = COMMAND_BUFFER[1] & 0x01;
+  uint8_t pin_idx = COMMAND_BUFFER[0];
+  uint8_t pin_val = COMMAND_BUFFER[1] & 0x01;
 
   if(pin_idx < sizeof WRITE_PINS) {
-    u8 pin_no = WRITE_PINS[pin_idx];
+    uint8_t pin_no = WRITE_PINS[pin_idx];
 
     switch(pin_no) {
       case READY_PIN:
@@ -477,7 +482,7 @@ bool cmd_read_pin(void) {
 
 // Server command - Get program state
 bool cmd_get_program_state(void) {
-  Serial.write((u8)CPU.v_state);
+  Serial.write((uint8_t)CPU.v_state);
   return true;
 }
 
@@ -494,34 +499,35 @@ bool cmd_get_cycle_status(void) {
   read_status0();
   read_8288_command_bits();
   read_8288_control_bits();
-  u8 byte0 = ((u8)CPU.v_state & 0x0F) << 4;
+  uint8_t byte0 = ((uint8_t)CPU.v_state & 0x0F) << 4;
   byte0 |= (CPU.control_bits & 0x0F);
 
   Serial.write(byte0);
   Serial.write(CPU.status0);
   Serial.write(CPU.command_bits);
   Serial.write(CPU.data_bus);
+  return true;
 }
 
-void patch_vector(u8 *vec, u16 seg) {
-  *((u16 *)&vec[3]) = seg;
+void patch_vector(uint8_t *vec, uint16_t seg) {
+  *((uint16_t *)&vec[3]) = seg;
 }
 
-void patch_load(registers *reg, u8 *prog) {
-  *((u16 *)prog) = reg->flags;
-  *((u16 *)&prog[LOAD_BX]) = reg->bx;
-  *((u16 *)&prog[LOAD_CX]) = reg->cx;
-  *((u16 *)&prog[LOAD_DX]) = reg->dx;
-  *((u16 *)&prog[LOAD_SS]) = reg->ss;
-  *((u16 *)&prog[LOAD_DS]) = reg->ds;
-  *((u16 *)&prog[LOAD_ES]) = reg->es;
-  *((u16 *)&prog[LOAD_SP]) = reg->sp;
-  *((u16 *)&prog[LOAD_BP]) = reg->bp;
-  *((u16 *)&prog[LOAD_SI]) = reg->si;
-  *((u16 *)&prog[LOAD_DI]) = reg->di;
-  *((u16 *)&prog[LOAD_AX]) = reg->ax;
-  *((u16 *)&prog[LOAD_IP]) = reg->ip;
-  *((u16 *)&prog[LOAD_CS]) = reg->cs;
+void patch_load(registers *reg, uint8_t *prog) {
+  *((uint16_t *)prog) = reg->flags;
+  *((uint16_t *)&prog[LOAD_BX]) = reg->bx;
+  *((uint16_t *)&prog[LOAD_CX]) = reg->cx;
+  *((uint16_t *)&prog[LOAD_DX]) = reg->dx;
+  *((uint16_t *)&prog[LOAD_SS]) = reg->ss;
+  *((uint16_t *)&prog[LOAD_DS]) = reg->ds;
+  *((uint16_t *)&prog[LOAD_ES]) = reg->es;
+  *((uint16_t *)&prog[LOAD_SP]) = reg->sp;
+  *((uint16_t *)&prog[LOAD_BP]) = reg->bp;
+  *((uint16_t *)&prog[LOAD_SI]) = reg->si;
+  *((uint16_t *)&prog[LOAD_DI]) = reg->di;
+  *((uint16_t *)&prog[LOAD_AX]) = reg->ax;
+  *((uint16_t *)&prog[LOAD_IP]) = reg->ip;
+  *((uint16_t *)&prog[LOAD_CS]) = reg->cs;
 }
 
 void print_registers(registers *regs) {
@@ -547,7 +553,7 @@ void print_registers(registers *regs) {
   Serial.println(buf);
 
   // Expand flag info
-  u16 f = regs->flags;
+  uint16_t f = regs->flags;
   char c_chr = CPU_FLAG_CARRY & f ? 'C' : 'c';
   char p_chr = CPU_FLAG_PARITY & f ? 'P' : 'p';
   char a_chr = CPU_FLAG_AUX_CARRY & f ? 'A' : 'a';
@@ -574,7 +580,7 @@ void print_cpu_state() {
   static char op_buf[7];
   static char q_buf[15];
   
-  char *ale_str = READ_ALE_PIN ? "A:" : "  ";
+  const char *ale_str = READ_ALE_PIN ? "A:" : "  ";
   
   char rs_chr = !READ_MRDC_PIN ? 'R' : '.';
   char aws_chr = !READ_AMWC_PIN ? 'A' : '.';
@@ -585,20 +591,20 @@ void print_cpu_state() {
   char iow_chr = !READ_IOWC_PIN ? 'W' : '.';
 
   char v_chr = MACHINE_STATE_CHARS[(size_t)CPU.v_state];
-  u8 q = (CPU.status0 >> 6) & 0x03;
+  uint8_t q = (CPU.status0 >> 6) & 0x03;
   char q_char = QUEUE_STATUS_CHARS[q];
   char s = CPU.status0 & 0x07;
 
   // Get segment from S3 & S4
-  char *seg_str = "  ";
+  const char *seg_str = "  ";
   if(CPU.bus_cycle != t1) {
     // Status is not avaialble on T1 because address is latched
-    u8 seg = ((CPU.status0 & 0x18) >> 3) & 0x03;
+    uint8_t seg = ((CPU.status0 & 0x18) >> 3) & 0x03;
     seg_str = SEGMENT_STRINGS[(size_t)seg];
   }
 
   // Draw some sad ascii representation of bus transfers
-  char *st_str = "  ";
+  const char *st_str = "  ";
   switch(CPU.bus_cycle) {
       case t1:
         
@@ -695,10 +701,10 @@ void change_state(machine_state new_state) {
       break;
     case Store:
       CPU.v_pc = 0;
-      // Take a raw u8 pointer to the register struct. Both x86 and Arduino are little-endian,
+      // Take a raw uint8_t pointer to the register struct. Both x86 and Arduino are little-endian,
       // so we can write raw incoming data over the struct. Faster than logic required to set
       // specific members. 
-      CPU.readback_p = (u8 *)&CPU.post_regs;      
+      CPU.readback_p = (uint8_t *)&CPU.post_regs;      
       break;
     case StoreDone:
       break;
@@ -706,12 +712,12 @@ void change_state(machine_state new_state) {
       break;
   }
 
-  u32 state_end_time = micros();
+  uint32_t state_end_time = micros();
 
   #if TRACE_STATE
   // Report time we spent in the previous state.
   if(CPU.state_begin_time != 0) {
-    u32 elapsed = state_end_time - CPU.state_begin_time;
+    uint32_t elapsed = state_end_time - CPU.state_begin_time;
     Serial.print("## Changing to state: ");
     Serial.print(MACHINE_STATE_STRINGS[(size_t)new_state]);
     Serial.print(". Spent (");
@@ -777,7 +783,7 @@ void cycle() {
   CPU.bus_state = (s_state)(CPU.status0 & 0x07);
 
   // Check QS0-QS1 queue status bits
-  u8 q = (CPU.status0 >> 6) & 0x03;
+  uint8_t q = (CPU.status0 >> 6) & 0x03;
   CPU.qb = 0xFF;
   CPU.q_ff = false;
 
@@ -848,7 +854,7 @@ void cycle() {
 
       if(READ_ALE_PIN) {
         // Jump is finished on first address latch of LOAD_SEG:0
-        u32 dest = calc_flat_address(LOAD_SEG, 0);
+        uint32_t dest = calc_flat_address(LOAD_SEG, 0);
         if(dest == CPU.address_latch) {
           change_state(Load);
           break;
@@ -1018,7 +1024,7 @@ void cycle() {
 
       // CPU is writing to IO address - this indicates we are saving a register value. 
       // We structured the register struct in the right order, so we can overwrite it
-      // with raw u8s.
+      // with raw uint8_ts.
       if(!READ_IOWC_PIN) {
 
         if(CPU.address_latch == 0xFD) {
@@ -1096,12 +1102,12 @@ void loop() {
 
     case WaitingForCommand:
       if(Serial.available() > 0) {
-        u8 cmd_byte = Serial.read();
+        uint8_t cmd_byte = Serial.read();
 
         bool got_command = false;
-        if(cmd_byte >= (u8)CmdInvalid) {
+        if(cmd_byte >= (uint8_t)CmdInvalid) {
           // Command is out of range, check against alias list
-          for( u8 a = 0; a < sizeof CMD_ALIASES; a++) {
+          for( uint8_t a = 0; a < sizeof CMD_ALIASES; a++) {
             if(cmd_byte == CMD_ALIASES[a]) {
               /*
               Serial.print("Got command alias: ");
@@ -1128,7 +1134,7 @@ void loop() {
         }
         if(CMD_INPUTS[cmd_byte] > 0) {
           // This command requires input bytes before it is executed.
-          SERVER.cmd = cmd_byte;
+          SERVER.cmd = server_command(cmd_byte);
           SERVER.cmd_byte_n = 0;
           SERVER.c_state = ReadingCommand;
           SERVER.cmd_bytes_expected = CMD_INPUTS[cmd_byte];
@@ -1150,7 +1156,7 @@ void loop() {
     case ReadingCommand:
       // The previously specified command requires paramater bytes, so read them in, or timeout
       if(Serial.available() > 0) {
-        u8 cmd_byte = Serial.read();
+        uint8_t cmd_byte = Serial.read();
 
         if(SERVER.cmd_byte_n < MAX_COMMAND_BYTES) {
           // Stil have bytes yet to read
@@ -1177,8 +1183,8 @@ void loop() {
       }
       else {
         // No bytes received yet, so keep track of how long we've been waiting
-        u32 now = millis();
-        u32 elapsed = now - SERVER.cmd_start_time;
+        uint32_t now = millis();
+        uint32_t elapsed = now - SERVER.cmd_start_time;
 
         if(elapsed >= CMD_TIMEOUT) {
           // Timed out waiting for parameter bytes. Send failure and revert to listening for command

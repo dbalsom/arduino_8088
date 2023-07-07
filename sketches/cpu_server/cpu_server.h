@@ -38,7 +38,7 @@ const char VERSION_DAT[] = {
   'a', 'r', 'd', '8', '0', '8', '8'
 };
 
-const u8 VERSION_NUM = 1;
+const uint8_t VERSION_NUM = 1;
 
 typedef enum {
   CmdNone            = 0x00,
@@ -72,7 +72,7 @@ typedef bool (*command_func)();
 #define RESPONSE_OK 0x01
 
 // ASCII aliases for commands, mostly for interactive debugging
-const u8 CMD_ALIASES[] = {
+const uint8_t CMD_ALIASES[] = {
   0, // CmdNone
   'v', // CmdVersion
   'r', // CmdReset
@@ -99,7 +99,7 @@ const u8 CMD_ALIASES[] = {
 
 // List of valid arguments to CmdWritePin. Only these specific pins
 // can have state written to.
-const u8 WRITE_PINS[] = {
+const uint8_t WRITE_PINS[] = {
   6,  // READY
   7,  // TEST
   12, // INTR
@@ -107,7 +107,7 @@ const u8 WRITE_PINS[] = {
 };
 
 // Number of argument bytes expected for each command
-const u8 CMD_INPUTS[] = {
+const uint8_t CMD_INPUTS[] = {
   0,  // CmdNone
   0,  // CmdVersion
   0,  // CmdReset
@@ -141,9 +141,9 @@ typedef enum {
 typedef struct server_state {
   command_state c_state;
   server_command cmd;
-  u8 cmd_byte_n;
-  u8 cmd_bytes_expected;
-  u32 cmd_start_time;
+  uint8_t cmd_byte_n;
+  uint8_t cmd_bytes_expected;
+  uint32_t cmd_start_time;
 } Server;
 
 bool cmd_version(void);
@@ -166,5 +166,9 @@ bool cmd_read_pin(void);
 bool cmd_get_program_state(void);
 bool cmd_get_last_error(void);
 bool cmd_get_cycle_status(void);
+
+extern Cpu CPU;
+
+void change_state(machine_state new_state);
 
 #endif
