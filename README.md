@@ -26,6 +26,18 @@ I have been using this project to validate the cycle-accuracy of my PC emulator,
 
 In short, no. We are well past the published minimum cycle times when executing programs via a serial protocol, cycle by cycle. Some chips tolerate this better than others. When working with an Intel branded 8088, I noticed that effective address calculations were failing to add the displacement or index register, but otherwise functioned. I have had more luck with the AMD second-source 8088 CPUs, which seem to function perfectly under slow clocks although they will hang and need to be reset if not cycled for a several milliseconds. The issue is "dynamic logic" - logic gates that lose their state if not refrehsed electrically within a frequent enough interval. To be absolutely safe, it is best to use a fully CMOS process CPU such as the 80C88. 
 
+## Upgrading to Arduino DUE or GIGA
+
+The Arduino DUE and GIGA boards are pin-compatible with the Arduino MEGA. Advtangages over a MEGA include faster CPUs and much faster Serial throughput via USB, allowing the 8088 to run at a much faster effective clock rate.
+
+However, they have 3.3v GPIO, so a modification to the PCB is required. 
+Once you have installed header pins, you will need to snip off the pin for the 5v line.
+
+![image](https://github.com/dbalsom/arduino_8088/assets/7229541/0c0a2810-f457-40e7-a718-f665e20bc10c)
+
+This is very important - sending 5v to the DUE or GIGA's GPIO inputs will damage the board.
+You can then connect a bridge wire between the 3v and 5v header socket to send 3v down the old 5v trace.
+
 ## Credits
 
 Inspired by and borrows from the Pi8088 validator created by Andreas Jonsson as part of the VirtualXT project:
