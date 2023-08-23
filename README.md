@@ -11,7 +11,6 @@ https://martypc.blogspot.com/2023/06/hardware-validating-emulator.html
 This project expands on the basic idea of controlling an Intel 8088 CPU via GPIO pins to clock the CPU and read and write control and data signals.
 This can be used to validate an emulator's accuracy, but also as a general method of exploring the operation of 8088 instructions and timings.
 
-
 Where it differs from Raspberry Pi based projects is that it uses an Arduino MEGA2560 to supply enough GPIO pins to operate the 8088 in Maximum mode without requiring any shifters. This enables several useful signals to be read such as the QS0 & QS1 processor instruction queue status lines, which give us more insight into the internal state of the CPU. We can also enable inputs such as READY, NMI, INTR, and TEST, so we can in theory execute interrupts, emulate wait states, and perhaps simulate FPU and DMA operations.
 
 I am utilizing an Intel 8288 bus controller, although in theory one could calculate its outputs by decoding the S0-S2 status lines. 
@@ -28,9 +27,9 @@ In short, no. We are well past the published minimum cycle times when executing 
 
 ## Upgrading to Arduino DUE or GIGA
 
-The Arduino DUE and GIGA boards are pin-compatible with the Arduino MEGA. Advtangages over a MEGA include faster CPUs and much faster Serial throughput via USB, allowing the 8088 to run at a much faster effective clock rate.
+The Arduino DUE and GIGA boards are pin-compatible with the Arduino MEGA. Advantages over a MEGA include faster CPUs and much faster Serial throughput via USB, allowing the 8088 to run at a much faster effective clock rate.
 
-However, they have 3.3v GPIO, so a modification to the PCB is required. 
+However, they have 3.3v GPIO vs the 5v GPIO of the MEGA, so a modification to the PCB is required to use Arduino8088 with these boards.
 Once you have installed header pins, you will need to snip off the pin for the 5v line.
 
 ![image](https://github.com/dbalsom/arduino_8088/assets/7229541/0c0a2810-f457-40e7-a718-f665e20bc10c)
