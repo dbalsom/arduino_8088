@@ -19,16 +19,20 @@
 #ifndef _CPU_SERVER_H
 #define _CPU_SERVER_H
 
-#define BAUD_RATE 1000000
+#define BAUD_RATE 2000000
+#define DEBUG_BAUD_RATE 57600
 //#define BAUD_RATE 460800
 
 #define CMD_TIMEOUT 100 // Command timeout in milliseconds
 #define MAX_COMMAND_BYTES 28 // Maximum length of command parameter input
 
 #define MODE_ASCII 0 // Use ASCII response codes (for interactive debugging only, client won't support)
-#define DEBUG_PROTO 0 // Insert debugging messages into serial output (Escaped by ##...##)
+#define DEBUG_PROTO 1 // Insert debugging messages into serial output (Escaped by ##...##)
 
 #define MAX_ERR_LEN 50 // Maximum length of an error string
+
+#define FINALIZE_TIMEOUT 30
+#define STORE_TIMEOUT 300
 
 const char RESPONSE_CHRS[] = {
   '!', '.'
@@ -62,7 +66,8 @@ typedef enum {
   CmdGetProgramState = 0x12,
   CmdLastError       = 0x13,
   CmdGetCycleStatus  = 0x14,
-  CmdInvalid         = 0x15,
+  CmdCGetCycleStatus = 0x15,
+  CmdInvalid         = 0x16,
   
 } server_command;
 
@@ -94,6 +99,7 @@ const u8 CMD_ALIASES[] = {
   'g', // CmdGetProgramState
   'e', // CmdGetLastError
   'f', // CmdGetCycleStatus
+  'h', // CmdCGetCycleStatus
   0 // CmdInvalid
 };
 
@@ -129,6 +135,7 @@ const u8 CMD_INPUTS[] = {
   0,  // CmdGetProgramState,
   0,  // CmdGetLastError,
   0,  // CmdGetCycleStatus,
+  0,  // CmdCGetCycleStatus,
   0   // CmdInvalid
 };
 
@@ -166,5 +173,6 @@ bool cmd_read_pin(void);
 bool cmd_get_program_state(void);
 bool cmd_get_last_error(void);
 bool cmd_get_cycle_status(void);
+bool cmd_cycle_get_cycle_status(void);
 
 #endif

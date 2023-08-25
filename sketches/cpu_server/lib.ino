@@ -19,8 +19,8 @@
 
 #include "arduino8088.h"
 
-u32 calc_flat_address(u16 seg, u16 offset) {
-  return ((u32)seg << 4) + offset;
+uint32_t calc_flat_address(uint16_t seg, uint16_t offset) {
+  return ((uint32_t)seg << 4) + offset;
 }
 
 // -------------------------- CPU Interface -----------------------------------
@@ -34,7 +34,7 @@ void clock_tick() {
 }
 
 // Write a value to the CPU's data bus
-void data_bus_write(u8 byte) {
+void data_bus_write(uint8_t byte) {
   // Set data bus pins 22-29 to OUTPUT
   DDRA = 0xFF;
   delayMicroseconds(PIN_CHANGE_DELAY);
@@ -44,7 +44,7 @@ void data_bus_write(u8 byte) {
 }
 
 // Read a value from the CPU's data bus
-u8 data_bus_read() {
+uint8_t data_bus_read() {
   // Set data bus pins 22-29 to INPUT
   DDRA = 0;
   delayMicroseconds(PIN_CHANGE_DELAY);
@@ -143,8 +143,8 @@ bool cpu_reset() {
 
   // Reset takes 7 cycles, bit we can try for longer
   for ( int i = 0; i < RESET_CYCLE_TIMEOUT; i++ ) {
-    //cycle();
-    clock_tick();
+    cycle();
+    //clock_tick();
     ale_cycles++;      
 
     if (READ_ALE_PIN) {
@@ -166,7 +166,7 @@ void init_queue() {
   CPU.queue.front = 0;
 }
 
-void push_queue(u8 byte, u8 dtype) {
+void push_queue(uint8_t byte, uint8_t dtype) {
   if(CPU.queue.len < QUEUE_MAX) {
     CPU.queue.queue[CPU.queue.front] = byte;
     CPU.queue.types[CPU.queue.front] = dtype;
@@ -175,7 +175,7 @@ void push_queue(u8 byte, u8 dtype) {
   }
 }
 
-void pop_queue(u8 *byte, u8 *dtype) {
+void pop_queue(uint8_t *byte, uint8_t *dtype) {
   if(CPU.queue.len > 0) {
     *byte = CPU.queue.queue[CPU.queue.back];
     *dtype = CPU.queue.types[CPU.queue.back];
@@ -198,8 +198,8 @@ void empty_queue() {
 void print_queue() {
   char buf[(QUEUE_MAX * 2) + 1] = {0};
   char hex[3] = {0};
-  u8 i;
-  u8 byte;
+  uint8_t i;
+  uint8_t byte;
   for(i = 0; i < CPU.queue.len; i++ ) {
     byte = CPU.queue.queue[(CPU.queue.back + i) % QUEUE_MAX];
     sprintf(hex, "%02X", byte);
@@ -208,7 +208,7 @@ void print_queue() {
   Serial.println(buf);
 }
 
-u8 read_queue(size_t idx) {
+uint8_t read_queue(size_t idx) {
   if(idx < CPU.queue.len) {
     return CPU.queue.queue[(CPU.queue.back + idx) % QUEUE_MAX];
   }
@@ -222,8 +222,8 @@ const char *queue_to_string() {
   static char buf[buf_len];
   char *buf_p = buf;
   *buf_p = 0;
-  u8 byte;
-  for(u8 i = 0; i < CPU.queue.len; i++ ) {
+  uint8_t byte;
+  for(uint8_t i = 0; i < CPU.queue.len; i++ ) {
     byte = CPU.queue.queue[(CPU.queue.back + i) % QUEUE_MAX];
     snprintf(buf_p, buf_len - (i * 2), "%02X", byte);
     buf_p += 2;
@@ -234,14 +234,14 @@ const char *queue_to_string() {
 
 void test_queue() {
 
-  u8 i;
+  uint8_t i;
   for(i = 0; i < 4; i++ ) {
     push_queue(i, 0);
   }
 
   print_queue();
 
-  u8 qt, qb;
+  uint8_t qt, qb;
 
   pop_queue(&qt, &qb);
   pop_queue(&qt, &qb);
@@ -251,7 +251,7 @@ void test_queue() {
 }
 
 // ----------------------------------Buzzer------------------------------------
-void beep(u32 time) {
+void beep(uint32_t time) {
   pinMode(BUZZER_PIN, OUTPUT);
   
   digitalWrite(BUZZER_PIN, HIGH);
@@ -276,7 +276,7 @@ void error_beep() {
 
 // Return the mnemonic name for the specified opcode. If the opcode is a group
 // opcode, op2 should be specified and modrm set to true.
-const char *get_opcode_str(u8 op1, u8 op2, bool modrm) {
+const char *get_opcode_str(uint8_t op1, uint8_t op2, bool modrm) {
 
   size_t op_idx = OPCODE_REFS[op1];
   size_t grp_idx = 0;
