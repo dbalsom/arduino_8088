@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "client/rust"
+]
+
+[package]
+name = "arduino_8088"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "cpu_client"
+path = "client/rust/src/main.rs"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+env_logger = "0.9"
+log = "0.4"
+#serialport = { git = "https://github.com/LukaOber/serialport-rs", branch = "pr/34" }
+serialport = { git = "https://github.com/dbalsom/serialport-rs", branch = "arduino-fix" }
