@@ -1,9 +1,12 @@
 #![allow(dead_code, unused_variables)]
-
-use serialport::{ClearBuffer};
+use std::io::{self, Read, Write};
+use std::time::Duration;
+use serialport::{SerialPort, ClearBuffer};
 use log;
 
 pub const ARD8088_BAUD: u32 = 1000000;
+//pub const ARD8088_BAUD: u32 = 115200;
+
 //pub const ARD8088_BAUD: u32 = 460800;
 
 #[derive(Copy, Clone)]
@@ -64,7 +67,7 @@ pub enum QueueOp {
 
 #[derive (PartialEq)]
 pub enum BusState {
-    IRQA = 0,   // IRQ Acknowledge
+    INTA = 0,   // IRQ Acknowledge
     IOR  = 1,   // IO Read
     IOW  = 2,   // IO Write
     HALT = 3,   // Halt
@@ -110,7 +113,7 @@ macro_rules! get_segment {
 macro_rules! get_bus_state {
     ($s:expr) => {
         match ($s & 0x07) {
-            0 => BusState::IRQA,
+            0 => BusState::INTA,
             1 => BusState::IOR,
             2 => BusState::IOW,
             3 => BusState::HALT,
@@ -210,7 +213,7 @@ impl CpuClient {
         match serialport::available_ports() {
             Ok(ports) => {
                 for port in ports {
-                    log::trace!("Found serial port: {}", port.port_name );
+                    log::debug!("Found serial port: {}", port.port_name );
                     if let Some(rtk_port) = CpuClient::try_port(port) {
                         return Ok(
                             CpuClient {
@@ -228,11 +231,13 @@ impl CpuClient {
         Err(CpuClientError::DiscoveryError)
     }
 
-    pub fn try_port(port_info: serialport::SerialPortInfo) -> Option<Box<dyn serialport::SerialPort>> {
+    pub fn try_port(port_info: serialport::SerialPortInfo) -> Option<Box<dyn SerialPort>> {
 
-        let port_result = serialport::new(port_info.port_name.clone(), ARD8088_BAUD)
-            .timeout(std::time::Duration::from_millis(20))
+        let port_result = serialport::new(port_info.port_name.clone(), 0)
+            .baud_rate(0)
+            .timeout(std::time::Duration::from_millis(100))
             .stop_bits(serialport::StopBits::One)
+            .data_bits(serialport::DataBits::Eight)
             .parity(serialport::Parity::None)
             .open();
         
@@ -246,18 +251,33 @@ impl CpuClient {
 
                 let cmd: [u8; 1] = [1];
                 let mut buf: [u8; 100] = [0; 100];
+
+                _ = new_port.flush();
+                log::trace!("Sending version query...");
+
                 match new_port.write(&cmd) {
-                    Ok(_) => {},
-                    Err(_) => {
-                        log::error!("try_port: Write error");
+                    Ok(_) => {
+                        log::trace!("Sent version query...");
+                    },
+                    Err(e) => {
+                        log::error!("try_port: Write error: {:?}", e);
+                        return None
+                    }
+                }
+                match new_port.flush() {
+                    Ok(_) => {
+                        log::trace!("Flushed output...");
+                    },
+                    Err(e) => {
+                        log::error!("try_port: flush error: {:?}", e);
                         return None
                     }
                 }
 
                 let bytes_read = match new_port.read(&mut buf) {
                     Ok(bytes) => bytes,
-                    Err(_) => {
-                        log::error!("try_port: Read error");
+                    Err(e) => {
+                        log::error!("try_port: Read error: {:?}", e);
                         return None;
                     }
                 };
@@ -279,6 +299,8 @@ impl CpuClient {
                 }     
                 else {
                     log::trace!("Invalid response from discovery command. Read {} bytes (Expected 9).", bytes_read);
+                    let ver_text = str::from_utf8(&buf).unwrap();
+                    log::trace!("First 9 bytes of response: {:?}", ver_text);
                 }           
                 None
             }
@@ -309,6 +331,7 @@ impl CpuClient {
         match self.port.borrow_mut().read(&mut buf) {
             Ok(bytes) => {
                 if bytes == 0 {
+                    log::error!("read_result_code: 0 bytes read");
                     Err(CpuClientError::ReadFailure)
                 }
                 else if (buf[0] & 0x01) != 0 {
@@ -316,10 +339,12 @@ impl CpuClient {
                     Ok(true)
                 }
                 else {
+                    log::error!("read_result_code: command returned failure");
                     Err(CpuClientError::CommandFailed)
                 }
             },
-            Err(_) => {
+            Err(e) => {
+                log::error!("read_result_code: read operation failed: {}", e);
                 Err(CpuClientError::ReadFailure)
             }
         }
@@ -346,7 +371,7 @@ impl CpuClient {
             Ok(bytes) => {
                 if bytes != buf.len() {
                     // We didn't read entire buffer worth of data, fail
-                    log::error!("Only read {} bytes of 28.", bytes);
+                    log::error!("recv_buf: Only read {} bytes of 28.", bytes);
                     Err(CpuClientError::ReadFailure)
                 }
                 else {
@@ -354,7 +379,8 @@ impl CpuClient {
                 }
                 
             },
-            Err(_) => {
+            Err(e) => {
+                log::error!("recv_buf: read operation failed: {}", e);
                 Err(CpuClientError::ReadFailure)
             }
         }

@@ -9,4 +9,5 @@ edition = "2021"
 clap = { version = "4.0", features = ["derive"] }
 env_logger = "0.9"
 log = "0.4"
-serialport = "4.2.0"
+#serialport = { git = "https://github.com/LukaOber/serialport-rs", branch = "pr/34" }
+serialport = { git = "https://github.com/dbalsom/serialport-rs", branch = "arduino-fix" }

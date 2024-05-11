@@ -9,6 +9,11 @@ mod opcodes;
 use crate::remote_cpu::queue::*;
 use crate::remote_cpu::opcodes::*;
 
+pub const WAIT_STATES: u32 = 0;
+
+pub const CYCLE_LIMIT: u32 = 100_000;
+pub const HALT_CYCLE_LIMIT: u32 = 52;
+
 pub const CPU_FLAG_CARRY: u16      = 0b0000_0000_0000_0001;
 pub const CPU_FLAG_RESERVED1: u16  = 0b0000_0000_0000_0010;
 pub const CPU_FLAG_PARITY: u16     = 0b0000_0000_0000_0100;
@@ -26,6 +31,12 @@ const ADDRESS_SPACE: usize = 1_048_576;
 const IO_FINALIZE_ADDR: u32 = 0x00FF;
 
 const ISR_SEGMENT: u16 = 0xF800;
+
+macro_rules! cycle_comment {
+    ($self:ident, $($t:tt)*) => {{
+        $self.cycle_comment = Some(format!($($t)*));
+    }};
+}
 
 #[derive (Default, Debug)]
 pub struct RemoteCpuRegisters {
@@ -72,8 +83,12 @@ pub struct RemoteCpu {
     data_type: QueueDataType,
 
     cycle_num: u32,
+    cycle_comment: Option<String>,
+    instruction_num: u32,
     mcycle_state: BusState,
     bus_cycle: BusCycle,
+
+    nready_states: u32,
 
     queue: InstructionQueue,
     queue_byte: u8,
@@ -86,10 +101,23 @@ pub struct RemoteCpu {
 
     do_nmi: bool,
     intr: bool,
+
+    halted: bool,
+    halt_ct: u32,
+
+    wait_state_opt: u32,
+    intr_on_cycle: u32,
+    intr_after: u32
 }
 
 impl RemoteCpu {
-    pub fn new(client: CpuClient) -> RemoteCpu {
+    pub fn new(
+        client: CpuClient, 
+        wait_state_opt: u32, 
+        intr_on: u32,
+        intr_after: u32
+    ) -> RemoteCpu {
+
         RemoteCpu {
             client,
             regs: Default::default(),
@@ -105,8 +133,11 @@ impl RemoteCpu {
             data_bus: 0,
             data_type: QueueDataType::Program,
             cycle_num: 0,
+            cycle_comment: None,
+            instruction_num: 0,
             mcycle_state: BusState::PASV,
             bus_cycle: BusCycle::T1,
+            nready_states: 0,
             queue: InstructionQueue::new(),
             queue_byte: 0,
             queue_type: QueueDataType::Program,
@@ -116,7 +147,12 @@ impl RemoteCpu {
             opcode: 0,
             finalize: false,
             do_nmi: false,
-            intr: false
+            intr: false,
+            halted: false,
+            halt_ct: 0,
+            wait_state_opt,
+            intr_on_cycle: intr_on,
+            intr_after
         }
     }
 
@@ -130,6 +166,7 @@ impl RemoteCpu {
         self.data_bus = 0;
         self.data_type = QueueDataType::Program;
         self.cycle_num = 0;
+        self.instruction_num = 0;
         self.mcycle_state = BusState::PASV;
         self.bus_cycle = BusCycle::T1;
         self.queue = InstructionQueue::new();
@@ -173,7 +210,6 @@ impl RemoteCpu {
         self.end_addr = location + src_size;
 
         log::debug!("start addr: {:05X} end addr: {:05X}", self.start_addr, self.end_addr);
-
         true
     }
 
@@ -314,8 +350,6 @@ impl RemoteCpu {
             self.command_status, 
             self.data_bus
         ) = self.client.get_cycle_state().expect("Failed to get cycle state!");
-
-        
         true
     }
 
@@ -331,7 +365,12 @@ impl RemoteCpu {
 
     pub fn cycle(&mut self) -> bool {
 
-        self.client.cycle().expect("Failed to cycle cpu!");
+        match self.client.cycle() {
+            Ok(_) => {}
+            Err(e) => {
+                log::warn!("Ignoring cycle timeout");
+            }
+        }
         
         self.bus_cycle = match self.bus_cycle {
             BusCycle::T1 => {
@@ -346,15 +385,44 @@ impl RemoteCpu {
                 }
             }
             BusCycle::T2 => {
+                // If wait states are configured, deassert READY line now
+
+                if self.wait_state_opt > 0 {
+                    self.nready_states = self.wait_state_opt;
+                    //log::debug!("Deasserting READY to emulate wait states...");
+                    self.client.write_pin(CpuPin::READY, false).expect("Failed to write READY pin!");
+                }
                 BusCycle::T3
             }
             BusCycle::T3 => {
                 // TODO: Handle wait states
-                BusCycle::T4
+
+                if self.nready_states > 0 {
+                    self.nready_states -= 1;
+
+                    if self.nready_states == 0 {
+                        // Reassert READY line
+                        self.client.write_pin(CpuPin::READY, true).expect("Failed to write READY pin!");
+                    }
+                    BusCycle::Tw
+                }
+                else {
+                    BusCycle::T4
+                }
             }
             BusCycle::Tw => {
-                // TODO: Handle wait states
-                BusCycle::T4
+                if self.nready_states > 0 {
+                    self.nready_states -= 1;
+
+                    if self.nready_states == 0 {
+                        // Reassert READY line
+                        self.client.write_pin(CpuPin::READY, true).expect("Failed to write READY pin!");
+                    }
+                    BusCycle::Tw
+                }
+                else {
+                    BusCycle::T4
+                }
             }            
             BusCycle::T4 => {
                 if self.mcycle_state == BusState::CODE {
@@ -394,6 +462,12 @@ impl RemoteCpu {
 
         // Do reads & writes if we are in execute state.
         if self.program_state == ProgramState::Execute {
+
+            if let BusState::HALT = get_bus_state!(self.status) {
+                cycle_comment!(self, "CPU halted!");
+                self.halted = true;
+            }
+
             // MRDC status is active-low.
             if ((self.command_status & COMMAND_MRDC_BIT) == 0) && (self.bus_cycle == BusCycle::T2) {
 
@@ -418,7 +492,6 @@ impl RemoteCpu {
                     }
                 }
 
-
                 //log::trace!("Reading data bus: {:02X}", self.data_bus);
                 self.client.write_data_bus(self.data_bus).expect("Failed to write data bus.");
             }
@@ -438,7 +511,7 @@ impl RemoteCpu {
 
                 // Check if this is our special port address
                 if self.address_latch == 0x000FF {
-                    //log::trace!("IO write to INTR trigger!");
+                    cycle_comment!(self, "IO write to INTR trigger!");
                     
                     // Set INTR line high
                     self.client.write_pin(CpuPin::INTR, true).expect("Failed to set INTR line high.");
@@ -462,7 +535,7 @@ impl RemoteCpu {
 
                     // Was NMI triggered?
                     if self.do_nmi {
-                        log::trace!("Setting NMI pin high...");
+                        cycle_comment!(self, "Setting NMI pin high...");
                         self.client.write_pin(CpuPin::NMI, true).expect("Failed to write NMI pin!");
                         self.do_nmi = false;
                     }
@@ -470,16 +543,28 @@ impl RemoteCpu {
                     // Is this opcode an NMI trigger?
                     if self.opcode == OPCODE_NMI_TRIGGER {
                         // set flag to enable NMI on next instruction
-                        
                         //self.do_nmi = true;
                     }
 
                     // Is this opcode flagged as the end of execution?
                     if self.queue_type == QueueDataType::Finalize {
                         
-                        log::trace!("Finalizing execution!");
+                        cycle_comment!(self, "Finalizing execution!");
                         self.client.finalize().expect("Failed to finalize!");
                     }
+
+                    // Handle INTR instruction trigger
+                    if !is_group_op(self.queue_byte) {
+                        self.instruction_num += 1;
+        
+                        if self.instruction_num == self.intr_after {
+                            cycle_comment!(self, "Setting INTR high after instruction #{}", self.intr_after);
+                            
+                            // Set INTR line high
+                            self.client.write_pin(CpuPin::INTR, true).expect("Failed to set INTR line high.");
+                            self.intr = true;
+                        }
+                    }                    
                 }
                 else {
                     // Subsequent byte of instruction fetched
@@ -493,10 +578,26 @@ impl RemoteCpu {
             _ => {}
         }
 
-
+        if self.halted {
+            self.halt_ct += 1;
+            if self.halt_ct == HALT_CYCLE_LIMIT {
+                cycle_comment!(self, "Setting INTR high to recover from halt...");
+                self.client.write_pin(CpuPin::INTR, true).expect("Failed to write INTR pin!");
+                self.do_nmi = false;
+            }
+        }
         self.cycle_num += 1;
 
-        if self.cycle_num > 100 {
+        // Do cycle-based INTR trigger
+        if self.cycle_num == self.intr_on_cycle {
+            cycle_comment!(self, "Setting INTR high after cycle #{}", self.intr_on_cycle);
+                            
+            // Set INTR line high
+            self.client.write_pin(CpuPin::INTR, true).expect("Failed to set INTR line high.");
+            self.intr = true;            
+        }
+
+        if self.cycle_num > CYCLE_LIMIT {
             match self.client.finalize() {
                 Ok(_) => {
                     log::trace!("Finalized execution!");
@@ -570,7 +671,7 @@ impl RemoteCpu {
         let inta_chr = if self.command_status & COMMAND_INTA_BIT == 0 { 'A' } else { '.' };
 
         let bus_str = match get_bus_state!(self.status) {
-            BusState::IRQA => "IRQA",
+            BusState::INTA => "INTA",
             BusState::IOR  => "IOR ",
             BusState::IOW  => "IOW ",
             BusState::HALT => "HALT",
@@ -593,42 +694,45 @@ impl RemoteCpu {
 
         let mut xfer_str = "      ".to_string();
         if is_reading {
-            xfer_str = format!("<-r {:02X}", self.data_bus);
+            xfer_str = format!("r-> {:02X}", self.data_bus);
         }
         else if is_writing {
-            xfer_str = format!("w-> {:02X}", self.data_bus);
+            xfer_str = format!("<-w {:02X}", self.data_bus);
         }
 
         // Handle queue activity
 
-        let mut q_read_str = String::new();
+        let mut q_read_str = "       |".to_string();
 
         if q_op == QueueOp::First {
             // First byte of opcode read from queue. Decode it to opcode or group specifier
+
             if self.queue_byte == OPCODE_IRET {
 
                 let iret_addr = self.queue_fetch_addr;
                 let isr_base_addr = RemoteCpu::calc_linear_address(ISR_SEGMENT, 0);
                 let isr_number = (iret_addr - isr_base_addr) / 2;
-                q_read_str = format!("<-q {:02X} {} @ [{:05X}] ISR:{:02X}", self.queue_byte, opcodes::get_opcode_str(self.opcode, 0, false), self.queue_fetch_addr, isr_number);
+                q_read_str = format!("q-> {:02X} | {} @ [{:05X}] ISR:{:02X}", self.queue_byte, opcodes::get_opcode_str(self.opcode, 0, false), self.queue_fetch_addr, isr_number);
             }
             else {
-                q_read_str = format!("<-q {:02X} {} @ [{:05X}]", self.queue_byte, opcodes::get_opcode_str(self.opcode, 0, false), self.queue_fetch_addr);
+                q_read_str = format!("q-> {:02X} | {} @ [{:05X}]", self.queue_byte, opcodes::get_opcode_str(self.opcode, 0, false), self.queue_fetch_addr);
             }
         }
         else if q_op == QueueOp::Subsequent {
             if is_group_op(self.opcode) && self.queue_fetch_n == 1 {
                 // Modrm was just fetched for a group opcode, so display the mnemonic now
-                q_read_str = format!("<-q {:02X} {}", self.queue_byte, opcodes::get_opcode_str(self.opcode, self.queue_byte, true));
+                q_read_str = format!("q-> {:02X} | {}", self.queue_byte, opcodes::get_opcode_str(self.opcode, self.queue_byte, true));
             }
             else {
                 // Not modrm byte
-                q_read_str = format!("<-q {:02X}", self.queue_byte);
+                q_read_str = format!("q-> {:02X} |", self.queue_byte);
             }
         }        
       
+        let ccomment = if let Some(comment) = self.cycle_comment.take() { comment } else { "".to_string() };
+
         format!(
-            "{:08} {:02}[{:05X}] {:02} M:{}{}{} I:{}{}{} Q:{}{} {:04} {:02} {:06} | {:1}{:1} [{:08}] {}",
+            "{:08} {:02}[{:05X}] {:02} M:{}{}{} I:{}{}{} P:{}{} {:04} {:02} {:06} {:1}[{:08}] {} {}",
             self.cycle_num,
             ale_str,
             self.address_latch,
@@ -639,9 +743,9 @@ impl RemoteCpu {
             t_str,
             xfer_str,
             q_op_chr,
-            self.queue.len(),
             self.queue.to_string(),
-            q_read_str
+            q_read_str,
+            ccomment
         )
     }
 

@@ -20,7 +20,16 @@ struct Args {
    bin_file: PathBuf,
    
    #[arg(long, required(true))]
-   mount_addr: String
+   mount_addr: String,
+
+   #[arg(long, required(true))]
+   wait_states: u32,
+
+   #[arg(long, required(false))]
+   intr_after: u32,
+
+   #[arg(long, required(false))]
+   intr_on: u32,
 }
 
 fn main() {
@@ -65,7 +74,12 @@ fn main() {
     };
 
     // Create a remote cpu instance using the cpu_client which should now be connected.
-    let mut cpu = RemoteCpu::new(cpu_client);
+    let mut cpu = RemoteCpu::new(
+        cpu_client, 
+        args.wait_states, 
+        args.intr_on,
+        args.intr_after,
+    );
 
     // Copy the binary to memory
     log::trace!("Mounting program code at: {:05X}", mount_addr);
@@ -164,7 +178,7 @@ mod tests {
         };
 
         // Create a remote cpu instance using the cpu_client which should now be connected.
-        let mut cpu = RemoteCpu::new(cpu_client);
+        let mut cpu = RemoteCpu::new(cpu_client, 0, 0, 0);
 
         let mut regs = RemoteCpuRegisters {
             ax: 0,
@@ -229,7 +243,7 @@ mod tests {
         };
 
         // Create a remote cpu instance using the cpu_client which should now be connected.
-        let mut cpu = RemoteCpu::new(cpu_client);
+        let mut cpu = RemoteCpu::new(cpu_client, 0, 0, 0);
 
         let cf = true;
 
@@ -350,7 +364,7 @@ mod tests {
         };
 
         // Create a remote cpu instance using the cpu_client which should now be connected.
-        let mut cpu = RemoteCpu::new(cpu_client);
+        let mut cpu = RemoteCpu::new(cpu_client, 0, 0, 0);
 
         let cf = true;
 
@@ -471,7 +485,7 @@ mod tests {
         };
 
         // Create a remote cpu instance using the cpu_client which should now be connected.
-        let mut cpu = RemoteCpu::new(cpu_client);
+        let mut cpu = RemoteCpu::new(cpu_client, 0, 0, 0);
 
         let cf = true;
 
@@ -586,7 +600,7 @@ mod tests {
         };
 
         // Create a remote cpu instance using the cpu_client which should now be connected.
-        let mut cpu = RemoteCpu::new(cpu_client);
+        let mut cpu = RemoteCpu::new(cpu_client, 0, 0, 0);
 
         let cf = true;
 

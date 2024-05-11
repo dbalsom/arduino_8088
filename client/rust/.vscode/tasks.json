@@ -44,6 +44,17 @@
                 ],
 			},
 			"group": "build"
-		}        
+		},
+		{
+			"label": "build kefrensloop.asm",
+			"type": "shell",
+			"windows": {
+				"command": ".\\scripts\\build.bat",
+                "args": [
+                    "kefrensloop"
+                ],
+			},
+			"group": "build"
+		}               
 	]
 }
