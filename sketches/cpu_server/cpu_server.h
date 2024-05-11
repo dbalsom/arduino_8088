@@ -19,15 +19,16 @@
 #ifndef _CPU_SERVER_H
 #define _CPU_SERVER_H
 
-#define BAUD_RATE 2000000
-#define DEBUG_BAUD_RATE 57600
+#define BAUD_RATE 1000000
+#define DEBUG_BAUD_RATE 1000000
 //#define BAUD_RATE 460800
 
 #define CMD_TIMEOUT 100 // Command timeout in milliseconds
 #define MAX_COMMAND_BYTES 28 // Maximum length of command parameter input
 
 #define MODE_ASCII 0 // Use ASCII response codes (for interactive debugging only, client won't support)
-#define DEBUG_PROTO 1 // Insert debugging messages into serial output (Escaped by ##...##)
+#define DEBUG_PROTO 0 // Insert debugging messages into serial output (Escaped by ##...##)
+#define DEBUG_CMD 0 
 
 #define MAX_ERR_LEN 50 // Maximum length of an error string
 
@@ -42,7 +43,7 @@ const char VERSION_DAT[] = {
   'a', 'r', 'd', '8', '0', '8', '8'
 };
 
-const u8 VERSION_NUM = 1;
+const uint8_t VERSION_NUM = 1;
 
 typedef enum {
   CmdNone            = 0x00,
@@ -65,11 +66,36 @@ typedef enum {
   CmdReadPin         = 0x11,
   CmdGetProgramState = 0x12,
   CmdLastError       = 0x13,
-  CmdGetCycleStatus  = 0x14,
-  CmdCGetCycleStatus = 0x15,
+  CmdGetCycleState   = 0x14,
+  CmdCycleGetCycleState = 0x15,
   CmdInvalid         = 0x16,
-  
 } server_command;
+
+const char *CMD_STRINGS[] = {
+  "NONE",
+  "VERSION",
+  "RESET",
+  "LOAD",
+  "CYCLE",
+  "READADDR",
+  "READSTATUS",
+  "READ8288CMD",
+  "READ8288CTRL",
+  "READDATABUS",
+  "WRITEDATABUS",
+  "FINALIZE",
+  "BEGINSTORE",
+  "STORE",
+  "QUEUELEN",
+  "QUEUEBYTES",
+  "WRITEPIN",
+  "READPIN",
+  "GETPGMSTATE",
+  "GETLASTERR",
+  "GETCYCLESTATE",
+  "CGETCYCLESTATE",
+  "INVALID"
+};
 
 typedef bool (*command_func)();
 
@@ -77,7 +103,7 @@ typedef bool (*command_func)();
 #define RESPONSE_OK 0x01
 
 // ASCII aliases for commands, mostly for interactive debugging
-const u8 CMD_ALIASES[] = {
+const uint8_t CMD_ALIASES[] = {
   0, // CmdNone
   'v', // CmdVersion
   'r', // CmdReset
@@ -99,13 +125,12 @@ const u8 CMD_ALIASES[] = {
   'g', // CmdGetProgramState
   'e', // CmdGetLastError
   'f', // CmdGetCycleStatus
-  'h', // CmdCGetCycleStatus
   0 // CmdInvalid
 };
 
 // List of valid arguments to CmdWritePin. Only these specific pins
 // can have state written to.
-const u8 WRITE_PINS[] = {
+const uint8_t WRITE_PINS[] = {
   6,  // READY
   7,  // TEST
   12, // INTR
@@ -113,7 +138,7 @@ const u8 WRITE_PINS[] = {
 };
 
 // Number of argument bytes expected for each command
-const u8 CMD_INPUTS[] = {
+const uint8_t CMD_INPUTS[] = {
   0,  // CmdNone
   0,  // CmdVersion
   0,  // CmdReset
@@ -134,8 +159,8 @@ const u8 CMD_INPUTS[] = {
   1,  // CmdReadPin,
   0,  // CmdGetProgramState,
   0,  // CmdGetLastError,
-  0,  // CmdGetCycleStatus,
-  0,  // CmdCGetCycleStatus,
+  0,  // CmdGetCycleState,
+  0,  // CmdCycleGetCycleState,
   0   // CmdInvalid
 };
 
@@ -148,9 +173,9 @@ typedef enum {
 typedef struct server_state {
   command_state c_state;
   server_command cmd;
-  u8 cmd_byte_n;
-  u8 cmd_bytes_expected;
-  u32 cmd_start_time;
+  uint8_t cmd_byte_n;
+  uint8_t cmd_bytes_expected;
+  uint32_t cmd_start_time;
 } Server;
 
 bool cmd_version(void);
@@ -172,7 +197,7 @@ bool cmd_write_pin(void);
 bool cmd_read_pin(void);
 bool cmd_get_program_state(void);
 bool cmd_get_last_error(void);
-bool cmd_get_cycle_status(void);
-bool cmd_cycle_get_cycle_status(void);
+bool cmd_get_cycle_state(void);
+bool cmd_cycle_get_cycle_state(void);
 
 #endif

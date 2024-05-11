@@ -1,5 +1,5 @@
 /*
-  (C)2023 Daniel Balsom
+  (C)2023-2024 Daniel Balsom
   https://github.com/dbalsom/arduino_8088
 
     This program is free software: you can redistribute it and/or modify
@@ -16,12 +16,14 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 */
+#include <Arduino.h>
 #include "arduino8088.h"
 #include "cpu_server.h"
 #include "opcodes.h"
 
 static Server SERVER;
 static Cpu CPU;
+static Intel8288 I8288;
 
 registers LOAD_REGISTERS = {
   0x0000, // AX
@@ -97,9 +99,11 @@ command_func V_TABLE[] = {
   &cmd_read_pin,
   &cmd_get_program_state,
   &cmd_get_last_error,
-  &cmd_get_cycle_status,
-  &cmd_cycle_get_cycle_status
+  &cmd_get_cycle_state,
+  &cmd_cycle_get_cycle_state
 };
+
+const size_t MAX_CMD = (sizeof V_TABLE / sizeof (command_func));
 
 char LAST_ERR[MAX_ERR_LEN] = {0};
 
@@ -107,6 +111,8 @@ char LAST_ERR[MAX_ERR_LEN] = {0};
 void setup() {
   SERIAL.begin(BAUD_RATE);
   Serial1.begin(DEBUG_BAUD_RATE);
+  while (!SERIAL);
+  while (!Serial1);
 
   // Set all output pins to OUTPUT
   for( int p = 0; p < (sizeof OUTPUT_PINS / sizeof OUTPUT_PINS[0]); p++ ) {
@@ -143,8 +149,6 @@ void setup() {
 
 void set_error(const char *msg) {
   strncpy(LAST_ERR, msg, MAX_ERR_LEN - 1);
-
-  Serial1.println(LAST_ERR);
 }
 
 // Send a failure code byte in reponse to a failed command
@@ -152,7 +156,7 @@ void send_fail() {
   #if MODE_ASCII
     SERIAL.write(RESPONSE_CHRS[RESPONSE_FAIL]);
   #else
-    SERIAL.write(RESPONSE_FAIL);
+    SERIAL.write((uint8_t)RESPONSE_FAIL);
   #endif
 }
 
@@ -161,13 +165,23 @@ void send_ok() {
   #if MODE_ASCII
     SERIAL.write(RESPONSE_CHRS[RESPONSE_OK]);
   #else
-    SERIAL.write(RESPONSE_OK);
+    SERIAL.write((uint8_t)RESPONSE_OK);
   #endif
 }
 
-void debug_proto(const char*msg) {
+void debug_proto(const char* msg) {
   #if DEBUG_PROTO
     Serial1.print("## ");
+    Serial1.print(msg);
+    Serial1.println(" ##");
+  #endif
+}
+
+void debug_cmd(const char *cmd, const char* msg) {
+  #if DEBUG_PROTO
+    Serial1.print("## cmd ");
+    Serial1.print(cmd);
+    Serial1.print(": " );
     Serial1.print(msg);
     Serial1.println(" ##");
   #endif
@@ -176,8 +190,11 @@ void debug_proto(const char*msg) {
 // Server command - Version
 // Send server identifier 'ard8088' followed by protocol version number in binary
 bool cmd_version() {
-  SERIAL.write(VERSION_DAT, sizeof VERSION_DAT);
+  debug_cmd("VERSION", "In cmd");
+  SERIAL.write((uint8_t *)VERSION_DAT, sizeof VERSION_DAT);
   SERIAL.write(VERSION_NUM);
+  FLUSH;
+  Serial1.println("Got version query!");
   return true;
 }
 
@@ -186,12 +203,13 @@ bool cmd_version() {
 // This will be rarely used by itself as the register state is not set up. The Load 
 // command will reset the CPU and set register state.
 bool cmd_reset() {
-
-
-
+  debug_cmd("RESET", "In cmd");
   bool result;
   snprintf(LAST_ERR, MAX_ERR_LEN, "NO ERROR");
 
+  #if EMULATE_8288
+    reset_i8288();
+  #endif
   result = cpu_reset();
   if(result) {
     change_state(Execute);
@@ -215,6 +233,7 @@ bool cmd_cycle() {
 // AX, BX, CX, DX, SS, SP, FLAGS, IP, CS, DS, ES, BP, SI, DI
 bool cmd_load() {
 
+  //Serial1.println(">> Got load!");
   snprintf(LAST_ERR, MAX_ERR_LEN, "NO ERROR");
 
   // Sanity check
@@ -235,9 +254,12 @@ bool cmd_load() {
   LOAD_REGISTERS.flags &= CPU_FLAG_DEFAULT_CLEAR;
   LOAD_REGISTERS.flags |= CPU_FLAG_DEFAULT_SET;
 
+  #if EMULATE_8288
+    reset_i8288();
+  #endif
   bool result = cpu_reset();
   if(!result) {
-    set_error("Failed to reset CPU");
+    //set_error("Failed to reset CPU");
     return false;
   }
 
@@ -284,6 +306,7 @@ bool cmd_read_address() {
     SERIAL.write((uint8_t)((CPU.address_latch >> 8) & 0xFF));
     SERIAL.write((uint8_t)((CPU.address_latch >> 16) & 0xFF));
   #endif
+
   return true;
 }
 
@@ -500,7 +523,7 @@ bool cmd_write_pin(void) {
 // Server command - Read pin
 bool cmd_read_pin(void) {
   // Not implemented
-  SERIAL.write(0);
+  SERIAL.write((uint8_t)0);
   return true;
 }
 
@@ -516,10 +539,10 @@ bool cmd_get_last_error(void) {
   return true;
 }
 
-// Server command - Get Cycle Status
+// Server command - Get Cycle State
 // A combination of all the status info typically needed for a single cycle
 // Returns 4 bytes
-bool cmd_get_cycle_status(void) {
+bool cmd_get_cycle_state(void) {
   read_status0();
   read_8288_command_bits();
   read_8288_control_bits();
@@ -529,13 +552,21 @@ bool cmd_get_cycle_status(void) {
   SERIAL.write(byte0);
   SERIAL.write(CPU.status0);
   SERIAL.write(CPU.command_bits);
-  SERIAL.write(CPU.data_bus);
+  #if(DATA_BUS_SIZE == 1)
+    //debug_proto("Sending one byte of data bus");
+    SERIAL.write(CPU.data_bus);
+  #else
+    SERIAL.write(uint8_t(CPU.data_bus >> 8));
+    SERIAL.write(uint8_t(CPU.data_bus & 0xFF));
+  #endif
+
+  return true;
 }
 
-// Server command - Cycle & Get Cycle Status
-// A combination of all the status info typically needed for a single cycle
+// Server command - Cycle and Get Cycle State
+// Cycle the CPU + return A combination of all the status info typically needed for a single cycle
 // Returns 4 bytes
-bool cmd_cycle_get_cycle_status(void) {
+bool cmd_cycle_get_cycle_state(void) {
   cycle();
   read_status0();
   read_8288_command_bits();
@@ -546,7 +577,15 @@ bool cmd_cycle_get_cycle_status(void) {
   SERIAL.write(byte0);
   SERIAL.write(CPU.status0);
   SERIAL.write(CPU.command_bits);
-  SERIAL.write(CPU.data_bus);
+  #if(DATA_BUS_SIZE == 1)
+    debug_proto("writing one byte of data bus");
+    SERIAL.write(CPU.data_bus);
+  #else
+    SERIAL.write(uint8_t(CPU.data_bus >> 8));
+    SERIAL.write(uint8_t(CPU.data_bus & 0xFF));
+  #endif
+
+  return true;
 }
 
 void patch_vector(uint8_t *vec, uint16_t seg) {
@@ -617,10 +656,11 @@ void print_registers(registers *regs) {
 void print_cpu_state() {
   
   static char buf[81];
-  static char op_buf[7];
+  const size_t op_len = (4 + (DATA_BUS_SIZE * 2) + 1);
+  static char op_buf[op_len];
   static char q_buf[15];
   
-  char *ale_str = READ_ALE_PIN ? "A:" : "  ";
+  const char *ale_str = READ_ALE_PIN ? "A:" : "  ";
   
   char rs_chr = !READ_MRDC_PIN ? 'R' : '.';
   char aws_chr = !READ_AMWC_PIN ? 'A' : '.';
@@ -636,8 +676,8 @@ void print_cpu_state() {
   char s = CPU.status0 & 0x07;
 
   // Get segment from S3 & S4
-  char *seg_str = "  ";
-  if(CPU.bus_cycle != t1) {
+  const char *seg_str = "  ";
+  if(CPU.bus_cycle != T1) {
     // Status is not avaialble on T1 because address is latched
     uint8_t seg = ((CPU.status0 & 0x18) >> 3) & 0x03;
     seg_str = SEGMENT_STRINGS[(size_t)seg];
@@ -646,20 +686,19 @@ void print_cpu_state() {
   // Draw some sad ascii representation of bus transfers
   char *st_str = "  ";
   switch(CPU.bus_cycle) {
-      case t1:
-        
+      case T1:
         if((CPU.bus_state != PASV) && (CPU.bus_state != HALT) && (CPU.bus_state != IRQA)) {
           // Begin a bus state
           st_str = "\\ ";
         }
         break;
-      case t2: // FALLTHRU
-      case t3: // FALLTHRU
-      case tw:  
+      case T2: // FALLTHRU
+      case T3: // FALLTHRU
+      case TW:  
         // Continue a bus state
         st_str = " |";
         break;
-      case t4:
+      case T4:
         // End a bus state
         st_str = "/ ";
         break;
@@ -668,30 +707,33 @@ void print_cpu_state() {
   // Make string for bus reads and writes
   op_buf[0] = 0;
   if(!READ_MRDC_PIN || !READ_IORC_PIN) {
-    snprintf(op_buf, 7, "<-r %02X", CPU.data_bus);
+    snprintf(op_buf, op_len, "<-r %0*X", DATA_BUS_SIZE * 2, CPU.data_bus);
   }
   if(!READ_MWTC_PIN || !READ_IOWC_PIN) {
-    snprintf(op_buf, 7, "w-> %02X", CPU.data_bus);
+    snprintf(op_buf, op_len, "w-> %0*X", DATA_BUS_SIZE * 2, CPU.data_bus);
   }
 
   const char *q_str = queue_to_string();
 
   snprintf(
     buf, 81, 
-    "%08ld %c %s[%05lX] %2s M:%c%c%c I:%c%c%c %-4s %s %2s %6s | %c%d [%-8s]", 
+    "%08ld %c %s[%05lX] %2s M:%c%c%c I:%c%c%c %-4s %s %2s %-*s | %c%d [%-*s]", 
     CYCLE_NUM, 
     v_chr, 
     ale_str,
-    CPU.address_latch, 
+    //read_address(), 
+    CPU.address_latch,
     seg_str,
     rs_chr, aws_chr, ws_chr,
     ior_chr, aiow_chr, iow_chr,
     BUS_STATE_STRINGS[(size_t)CPU.bus_state],
     CYCLE_STRINGS[(size_t)CPU.bus_cycle], 
     st_str,
+    4 + (DATA_BUS_SIZE * 2),
     op_buf,
     q_char,
     CPU.queue.len,
+    QUEUE_MAX * 2,
     q_str
   );
 
@@ -717,7 +759,6 @@ void print_cpu_state() {
 }
 
 void change_state(machine_state new_state) {
-
   switch(new_state) {
     case Reset:
       CPU.doing_reset = true;    
@@ -783,27 +824,27 @@ void cycle() {
 
   if(!CPU.doing_reset) {
     switch(CPU.bus_cycle) {
-      case t1:
+      case T1:
         // Begin a bus cycle only if signalled, otherwise wait in T1
         if(CPU.bus_state != PASV) {
-          CPU.bus_cycle = t2;
+          CPU.bus_cycle = T2;
         }
         // Capture the state of the transfer cycle in T1, as the state will go passive T3-T4
-        CPU.transfer_state = (s_state)(CPU.status0 & 0x07);    
+        CPU.bus_state_latched = (s_state)(CPU.status0 & 0x07);    
         break;
 
-      case t2:
-        CPU.bus_cycle = t3;
+      case T2:
+        CPU.bus_cycle = T3;
         break;
 
-      case t3:
+      case T3:
         // TODO: Handle wait states between t3 & t4
-        CPU.bus_cycle = t4;
+        CPU.bus_cycle = T4;
         break;
 
-      case t4:
+      case T4:
         // Did we complete a code fetch? If so, increment queue len
-        if(CPU.transfer_state == CODE) {
+        if(CPU.bus_state_latched == CODE) {
           if(CPU.queue.len < QUEUE_MAX) {
             push_queue(CPU.data_bus, CPU.data_type);
           }
@@ -812,7 +853,7 @@ void cycle() {
             Serial1.println("## Error: Invalid Queue Length++ ##");
           }
         }
-        CPU.bus_cycle = t1;
+        CPU.bus_cycle = T1;
         break;
     }
   }
@@ -860,9 +901,11 @@ void cycle() {
 
   if(READ_ALE_PIN) {
     // ALE signals start of bus cycle, so set cycle to t1.
-    CPU.bus_cycle = t1;
+    CPU.bus_cycle = T1;
     // Address lines are only valid when ALE is high, so latch address now.
     latch_address();
+    //Serial1.print("## LATCHED ADDRESS: ");
+    //Serial1.println(CPU.address_latch);
   }
 
   switch(CPU.v_state) {
@@ -911,14 +954,25 @@ void cycle() {
           // We are reading a code byte
           if(CPU.v_pc < sizeof LOAD_PROGRAM) {
             // Feed load program to CPU
-            CPU.data_bus = LOAD_PROGRAM[CPU.v_pc];
+
+            #if (DATA_BUS_SIZE == 1)
+              CPU.data_bus = LOAD_PROGRAM[CPU.v_pc++];
+            #else
+              CPU.data_bus = LOAD_PROGRAM[CPU.v_pc++] << 8;
+              CPU.data_bus = LOAD_PROGRAM[CPU.v_pc++];
+            #endif
+
             CPU.data_type = DATA_PROGRAM;
-            CPU.v_pc++;
           }
           else {
             // Ran out of program, so return NOP. JMP cs:ip will actually fetch once before SUSP,
             // so we wil see this NOP prefetched.
-            CPU.data_bus = OPCODE_NOP;
+            #if (DATA_BUS_SIZE == 1)
+              CPU.data_bus = OPCODE_NOP;
+            #else
+              CPU.data_bus = OPCODE_DOUBLENOP;
+            #endif
+
             CPU.data_type = DATA_PROGRAM_END;
             //change_state(LoadDone);
           }
@@ -945,7 +999,7 @@ void cycle() {
       if (q == QUEUE_FLUSHED) {
         // Queue flush after final jump triggers next state.
         change_state(LoadDone);
-      }      
+      }
       break;
 
     case LoadDone:
@@ -987,10 +1041,13 @@ void cycle() {
       
       if(!READ_MRDC_PIN) {
         // CPU is reading (MRDC active-low)
-        if(CPU.bus_state == CODE) {
+        if(CPU.bus_state_latched == CODE) {
           // CPU is reading code byte, give it a flagged NOP
           CPU.data_bus = OPCODE_NOP;
           CPU.data_type = DATA_PROGRAM_END;
+          #if DEBUG_FINALIZE
+            Serial1.println("** Writing NOP in finalize **");
+          #endif
           data_bus_write(CPU.data_bus);
         }
       }
@@ -1048,15 +1105,12 @@ void cycle() {
         }
         else {
           // We shouldn't be writing to any other addresses, something wrong happened
-
           if (CPU.address_latch == 0x00004) {
             Serial1.println("## TRAP detected in Store operation! Invalid flags?");
           }
 
-          #if DEBUG_STORE
-            Serial1.println("## INVALID STORE WRITE: ");
-            Serial1.println(CPU.address_latch, HEX);
-          #endif
+          Serial1.println("## INVALID STORE WRITE: ");
+          Serial1.println(CPU.address_latch, HEX);
           set_error("Invalid store write");
           // TODO: handle error gracefully
         }
@@ -1064,7 +1118,7 @@ void cycle() {
           Serial1.print("## Store memory write: ");
           Serial1.println(CPU.data_bus, HEX);
         #endif
-      }    
+      }
 
       // CPU is writing to IO address - this indicates we are saving a register value. 
       // We structured the register struct in the right order, so we can overwrite it
@@ -1096,8 +1150,23 @@ void cycle() {
         }
       }
 
-    case StoreDone:
+    /*
+    case Done:
+      if(!READ_MRDC_PIN) {
+        // CPU is reading
+        
+        if(CPU.bus_state == CODE) {
+          // CPU is doing code fetch
+          CPU.data_bus = 0x90;
+          CPU.data_type = DATA_PROGRAM_END;
+          data_bus_write(CPU.data_bus);
+        }
+        else {
+          Serial1.print("**Unexpected read in DONE**");
+        }        
+      }    
       break;
+      */
 
     break;
   }
@@ -1129,6 +1198,7 @@ void cycle() {
       #if TRACE_FINALIZE
         print_cpu_state();
       #endif
+      break;
     case Store:
       #if TRACE_STORE
         print_cpu_state();  
@@ -1151,6 +1221,8 @@ void loop() {
     case WaitingForCommand:
       if(SERIAL.available() > 0) {
         uint8_t cmd_byte = SERIAL.read();
+
+        debug_cmd(CMD_STRINGS[cmd_byte], "received!");
 
         bool got_command = false;
         if(cmd_byte >= (uint8_t)CmdInvalid) {
@@ -1180,9 +1252,14 @@ void loop() {
           // We ignore command byte 0 (null command)
           break;
         }
-        if(CMD_INPUTS[cmd_byte] > 0) {
+        else if (cmd_byte > MAX_CMD) {
+          // Cmd is out of range
+          debug_proto("Command out of range!");
+          break;
+        }
+        else if(CMD_INPUTS[cmd_byte] > 0) {
           // This command requires input bytes before it is executed.
-          SERVER.cmd = cmd_byte;
+          SERVER.cmd = (server_command)cmd_byte;
           SERVER.cmd_byte_n = 0;
           SERVER.c_state = ReadingCommand;
           SERVER.cmd_bytes_expected = CMD_INPUTS[cmd_byte];
@@ -1192,9 +1269,11 @@ void loop() {
           // Command requires no input, execute immediately
           bool result = V_TABLE[cmd_byte - 1]();
           if(result) {  
+            debug_proto("Command OK!");
             send_ok();
           }
           else {
+            debug_proto("Command FAIL!");
             send_fail();
           }
         }
@@ -1205,7 +1284,7 @@ void loop() {
       // The previously specified command requires paramater bytes, so read them in, or timeout
       if(SERIAL.available() > 0) {
         uint8_t cmd_byte = SERIAL.read();
-
+        
         if(SERVER.cmd_byte_n < MAX_COMMAND_BYTES) {
           // Stil have bytes yet to read
           COMMAND_BUFFER[SERVER.cmd_byte_n] = cmd_byte;
@@ -1223,11 +1302,10 @@ void loop() {
 
             // Revert to listening for command
             SERVER.cmd_byte_n = 0;
-            SERVER.cmd_bytes_expected = 0;          
+            SERVER.cmd_bytes_expected = 0;
             SERVER.c_state = WaitingForCommand;
           }
         }
-          
       }
       else {
         // No bytes received yet, so keep track of how long we've been waiting

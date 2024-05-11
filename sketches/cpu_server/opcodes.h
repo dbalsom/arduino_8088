@@ -1,5 +1,5 @@
 /*
-  (C)2023 Daniel Balsom
+  (C)2023-2024 Daniel Balsom
   https://github.com/dbalsom/arduino_8088
 
     This program is free software: you can redistribute it and/or modify
@@ -20,6 +20,7 @@
 #define _ARDUINO8088_OPCODES_H
 
 #define OPCODE_NOP 0x90
+#define OPCODE_DOUBLENOP 0x9090
 #define MODRM_OP(M) (((M & 0b00111000) >> 3) & 0x07)
 
 #define GRP1 105
@@ -31,7 +32,7 @@
 #define IS_GRP_OP(O) ((OPCODE_REFS[O] >= GRP1) && (OPCODE_REFS[O] <= GRP2B))
 
 // LUT of primary opcode to Mnemonic (Or Group name)
-static const u8 OPCODE_REFS[] = {
+static const uint8_t OPCODE_REFS[] = {
  0, 0, 0, 0, 0, 0, 1, 2, 3, 3, 3, 3, 3, 3, 1, 2,
  4, 4, 4, 4, 4, 4, 1, 2, 5, 5, 5, 5, 5, 5, 1, 2,
  6, 6, 6, 6, 6, 6, 7, 8, 9, 9, 9, 9, 9, 9, 10, 11, 
