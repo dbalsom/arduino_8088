@@ -61,8 +61,10 @@ https://www.amazon.com/Treedix-Stacking-Headers-Stackable-Compatible/dp/B08G4FGB
 - A DIP-40 and (optionally) DIP-20 socket
   - Optional: You can spring for a ZIF socket such as [https://www.amazon.com/-/en/gp/product/B00B886OZI](https://www.amazon.com/-/en/gp/product/B00B886OZI)
 
-- (Optional) A 3V, 12mm buzzer
+- (Optional) A 3V, 12mm buzzer <= 30Ma
   https://www.digikey.com/en/products/detail/mallory-sonalert-products-inc/PB-1226PEAQ/1957866
+  WARNING: Only connect a buzzer if using an Arduino MEGA.  The DUE has much lower GPIO max current supply.
+  
 - (2x) 0.047 0805 bypass capacitors
   https://www.digikey.com/en/products/detail/kemet/C0805C473K5RAC7800/411165
 
