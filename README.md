@@ -11,7 +11,7 @@ https://martypc.blogspot.com/2023/06/hardware-validating-emulator.html
 This project expands on the basic idea of controlling an Intel 8088 or NEC V20 CPU via GPIO pins to clock the CPU and read and write control and data signals.
 This can be used to validate an emulator's accuracy, but also as a general method of exploring the operation of 8088 and V20 instructions and timings.
 
-Where it differs from Raspberry Pi based projects is that it uses an Arduino MEGA2560, DUE or GIGA to supply enough GPIO pins to operate the 8088 in Maximum mode without requiring any shifters. This enables several useful signals to be read such as the QS0 & QS1 processor instruction queue status lines, which give us more insight into the internal state of the CPU. We can also enable inputs such as READY, NMI, INTR, and TEST, so we can in theory execute interrupts, emulate wait states, and perhaps simulate FPU and DMA operations.
+Where it differs from Raspberry Pi based projects is that it uses an Arduino DUE to supply enough GPIO pins to operate the 8088 in Maximum mode without requiring any shifters. This enables several useful signals to be read such as the QS0 & QS1 processor instruction queue status lines, which give us more insight into the internal state of the CPU. We can also enable inputs such as READY, NMI, INTR, and TEST, so we can in theory execute interrupts, emulate wait states, and perhaps simulate FPU and DMA operations.
 
 The board supports an Intel 8288 bus controller which can produce bus signals, but this chip is optional as the sketch can perform i8288 emulation.
 
@@ -52,21 +52,36 @@ In theory the board could also support an 8086 CPU. Version 1.1 adds a connectio
 which indicates the size of the current bus transfer.  The cpu_server sketch and protocol still needs modification to support 16 bit data transfers and the longer queue length on the 8086.
 
 # BOM
-- A compatible 80C88 or NEC V20 CPU. Beware of counterfeits on eBay and other online vendors.
+- A compatible CPU. For best results, use a CMOS CPU such as a Harris 80C88, Oki 80C88, or NEC V20 CPU. Beware of counterfeits on eBay and other online vendors.
 A legitimate chip will not look shiny and new with perfect printing on it.
-- (Optional) An Intel 80C8288 Bus Controller
+
+- (Optional) An Intel 8288 or OKI 82C88 Bus Controller. If not using an 8288, set the EMULATE_8288 flag in cpu_server.
+
 - A set of Arduino stacking headers (also usable with DUE) 
 https://www.amazon.com/Treedix-Stacking-Headers-Stackable-Compatible/dp/B08G4FGBPQ
 
 - A DIP-40 and (optionally) DIP-20 socket
   - Optional: You can spring for a ZIF socket such as [https://www.amazon.com/-/en/gp/product/B00B886OZI](https://www.amazon.com/-/en/gp/product/B00B886OZI)
 
-- (Optional) A 3V, 12mm buzzer <= 30Ma
-  https://www.digikey.com/en/products/detail/mallory-sonalert-products-inc/PB-1226PEAQ/1957866
-  WARNING: Only connect a buzzer if using an Arduino MEGA.  The DUE has much lower GPIO max current supply.
-  
-- (2x) 0.047 0805 bypass capacitors
-  https://www.digikey.com/en/products/detail/kemet/C0805C473K5RAC7800/411165
+- (2x) 0805 0.047uf bypass capacitors
+  https://www.mouser.com/ProductDetail/80-C0805C473KARAUTO
 
-I have included optional LEDs on the current revision board but have not chosen models or resistor values 
-yet. I will update this document when I do.
+- (Optional) A 12mm, active buzzer with 7.6mm pin spacing. 
+
+  - For DUE: A 3V piezoelectric, low power buzzer <= 6mA
+    https://www.mouser.com/ProductDetail/Mallory-Sonalert/PK-11N40PQ?qs=SXHtpsd1MbZ%252B7jeUyAAOVA%3D%3D
+    
+  - For MEGA: Any 3-5V buzzer <= 30mA
+    WARNING: Only connect an electromagnetic buzzer if using an Arduino MEGA.  The DUE has much lower GPIO max current supply.    
+
+- (2x) 750Ohm resistors (for LEDs)
+  https://www.mouser.com/ProductDetail/667-ERA-6AED751V
+
+- (2x) Any 0805 ~2V LED of your choice with 1.8-1.9mA forward current
+  - https://www.mouser.com/ProductDetail/604-APTD2012LCGCK (Green)
+  - https://www.mouser.com/ProductDetail/604-APT2012LSECKJ4RV (Orange)
+ 
+- RS232 board for debug output - choose gender based on your desired cabling
+  - https://www.amazon.com/Ultra-Compact-RS232-Converter-1Mbps/dp/B074BMLM11 (male)
+  - https://www.amazon.com/Ultra-Compact-RS232-Converter-Female/dp/B074BTGLJN (female)
+  - WARNING: DO NOT connect 5V to rs232 board on DUE 
