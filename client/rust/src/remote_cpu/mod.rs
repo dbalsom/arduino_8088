@@ -1,11 +1,13 @@
 #![allow(dead_code, unused_variables)]
 
-use crate::arduino_8088_client::*;
-
 mod queue;
 #[macro_use]
 mod opcodes;
 
+use std::collections::VecDeque;
+use std::str::FromStr;
+
+use crate::arduino_8088_client::*;
 use crate::remote_cpu::queue::*;
 use crate::remote_cpu::opcodes::*;
 
@@ -27,15 +29,41 @@ pub const CPU_FLAG_INT_ENABLE: u16 = 0b0000_0010_0000_0000;
 pub const CPU_FLAG_DIRECTION: u16  = 0b0000_0100_0000_0000;
 pub const CPU_FLAG_OVERFLOW: u16   = 0b0000_1000_0000_0000;
 
-const ADDRESS_SPACE: usize = 1_048_576;
+const ADDRESS_SPACE: usize = 0x10_0000;
 const IO_FINALIZE_ADDR: u32 = 0x00FF;
-
 const ISR_SEGMENT: u16 = 0xF800;
+
+static NULL_PRELOAD_PGM: [u8; 0] = [];
+static INTEL808X_PRELOAD_PGM: [u8; 4] = [0xAA, 0xAA, 0xAA, 0xAA]; // (4x stosb)
+static NECVX0_PRELOAD_PGM: [u8; 2] = [0x63, 0xC0]; // (undefined, no side effects)
+
+static INTEL_PREFIXES: [u8; 8] = [0x26, 0x2E, 0x36, 0x3E, 0xF0, 0xF1, 0xF2, 0xF3];
+static NEC_PREFIXES: [u8; 10] = [0x26, 0x2E, 0x36, 0x3E, 0xF0, 0xF1, 0xF2, 0xF3, 0x64, 0x65];
 
 macro_rules! cycle_comment {
     ($self:ident, $($t:tt)*) => {{
         $self.cycle_comment = Some(format!($($t)*));
     }};
+}
+
+#[derive (Copy, Clone, Debug)]
+pub enum CpuType {
+    Intel8088,
+    NecV20,
+}
+
+impl FromStr for CpuType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        match s.to_lowercase().as_str() {
+            "8088" => Ok(CpuType::Intel8088),
+            "v20" => Ok(CpuType::NecV20),
+            _ => Err("Bad value for CpuType".to_string()),
+        }
+    }
 }
 
 #[derive (Default, Debug)]
@@ -57,6 +85,99 @@ pub struct RemoteCpuRegisters {
     pub flags: u16
 }
 
+impl RemoteCpuRegisters {
+    pub fn adjust_ip(&mut self, adjust: u16) {
+        self.ip = self.ip.wrapping_sub(adjust);
+    }
+
+    pub fn to_buf(buf: &mut [u8], regs: &RemoteCpuRegisters) {
+        // AX, BX, CX, DX, SS, SP, FLAGS, IP, CS, DS, ES, BP, SI, DI
+        buf[0] = (regs.ax & 0xFF) as u8;
+        buf[1] = ((regs.ax >> 8) & 0xFF) as u8;
+
+        buf[2] = (regs.bx & 0xFF) as u8;
+        buf[3] = ((regs.bx >> 8) & 0xFF) as u8;
+
+        buf[4] = (regs.cx & 0xFF) as u8;
+        buf[5] = ((regs.cx >> 8) & 0xFF) as u8;
+
+        buf[6] = (regs.dx & 0xFF) as u8;
+        buf[7] = ((regs.dx >> 8) & 0xFF) as u8;
+
+        buf[8] = (regs.ss & 0xFF) as u8;
+        buf[9] = ((regs.ss >> 8) & 0xFF) as u8;
+
+        buf[10] = (regs.sp & 0xFF) as u8;
+        buf[11] = ((regs.sp >> 8) & 0xFF) as u8;
+
+        buf[12] = (regs.flags & 0xFF) as u8;
+        buf[13] = ((regs.flags >> 8) & 0xFF) as u8;
+
+        buf[14] = (regs.ip & 0xFF) as u8;
+        buf[15] = ((regs.ip >> 8) & 0xFF) as u8;
+
+        buf[16] = (regs.cs & 0xFF) as u8;
+        buf[17] = ((regs.cs >> 8) & 0xFF) as u8;
+
+        buf[18] = (regs.ds & 0xFF) as u8;
+        buf[19] = ((regs.ds >> 8) & 0xFF) as u8;
+
+        buf[20] = (regs.es & 0xFF) as u8;
+        buf[21] = ((regs.es >> 8) & 0xFF) as u8;
+
+        buf[22] = (regs.bp & 0xFF) as u8;
+        buf[23] = ((regs.bp >> 8) & 0xFF) as u8;
+
+        buf[24] = (regs.si & 0xFF) as u8;
+        buf[25] = ((regs.si >> 8) & 0xFF) as u8;
+
+        buf[26] = (regs.di & 0xFF) as u8;
+        buf[27] = ((regs.di >> 8) & 0xFF) as u8;
+    }
+}
+
+impl From<&[u8; 28]> for RemoteCpuRegisters {
+    fn from(buf: &[u8; 28]) -> Self { 
+        RemoteCpuRegisters {
+            ax:    buf[0] as u16 | ((buf[1] as u16) << 8),
+            bx:    buf[2] as u16 | ((buf[3] as u16) << 8),
+            cx:    buf[4] as u16 | ((buf[5] as u16) << 8),
+            dx:    buf[6] as u16 | ((buf[7] as u16) << 8),
+            ss:    buf[8] as u16 | ((buf[9] as u16) << 8),
+            sp:    buf[10] as u16 | ((buf[11] as u16) << 8),
+            flags: buf[12] as u16 | ((buf[13] as u16) << 8),
+            ip:    buf[14] as u16 | ((buf[15] as u16) << 8),
+            cs:    buf[16] as u16 | ((buf[17] as u16) << 8),
+            ds:    buf[18] as u16 | ((buf[19] as u16) << 8),
+            es:    buf[20] as u16 | ((buf[21] as u16) << 8),
+            bp:    buf[22] as u16 | ((buf[23] as u16) << 8),
+            si:    buf[24] as u16 | ((buf[25] as u16) << 8),
+            di:    buf[26] as u16 | ((buf[27] as u16) << 8),
+        }
+    }
+}
+impl From<&[u8]> for RemoteCpuRegisters {
+    fn from(buf: &[u8]) -> Self { 
+        RemoteCpuRegisters {
+            ax:    buf[0] as u16 | ((buf[1] as u16) << 8),
+            bx:    buf[2] as u16 | ((buf[3] as u16) << 8),
+            cx:    buf[4] as u16 | ((buf[5] as u16) << 8),
+            dx:    buf[6] as u16 | ((buf[7] as u16) << 8),
+            ss:    buf[8] as u16 | ((buf[9] as u16) << 8),
+            sp:    buf[10] as u16 | ((buf[11] as u16) << 8),
+            flags: buf[12] as u16 | ((buf[13] as u16) << 8),
+            ip:    buf[14] as u16 | ((buf[15] as u16) << 8),
+            cs:    buf[16] as u16 | ((buf[17] as u16) << 8),
+            ds:    buf[18] as u16 | ((buf[19] as u16) << 8),
+            es:    buf[20] as u16 | ((buf[21] as u16) << 8),
+            bp:    buf[22] as u16 | ((buf[23] as u16) << 8),
+            si:    buf[24] as u16 | ((buf[25] as u16) << 8),
+            di:    buf[26] as u16 | ((buf[27] as u16) << 8),
+        }
+    }
+}
+
+
 #[derive (PartialEq)]
 pub enum BusCycle {
     T1,
@@ -66,7 +187,34 @@ pub enum BusCycle {
     Tw
 }
 
+#[derive (Copy, Clone, Debug)]
+pub struct PrintOptions {
+    pub print_pgm: bool,
+    pub print_preload: bool,
+    pub print_finalize: bool,
+}
+
+impl Default for PrintOptions {
+    fn default() -> Self {
+        Self {
+            print_pgm: false,
+            print_preload: false,
+            print_finalize: false,
+        }
+    }
+}
+
+#[derive (Copy, Clone, Debug, Default)]
+pub enum RunState {
+    #[default]
+    Init,
+    Preload,
+    Program,
+    Finalize,
+}
+
 pub struct RemoteCpu {
+    cpu_type: CpuType,
     client: CpuClient,
     regs: RemoteCpuRegisters,
     memory: Vec<u8>,
@@ -74,7 +222,11 @@ pub struct RemoteCpu {
     start_addr: usize,
     end_addr: usize,
     program_state: ProgramState,
+    run_state: RunState,
+    preload_pgm: VecDeque<u8>,
+    preload_pc: usize,
 
+    address_bus: u32,
     address_latch: u32,
     status: u8,
     command_status: u8,
@@ -96,29 +248,50 @@ pub struct RemoteCpu {
     queue_first_fetch: bool,
     queue_fetch_n: u8,
     queue_fetch_addr: u32,
+    queue_len_at_finalize: u8,
     opcode: u8,
     finalize: bool,
 
     do_nmi: bool,
     intr: bool,
+    nmi: bool,
 
     halted: bool,
     halt_ct: u32,
 
     wait_state_opt: u32,
     intr_on_cycle: u32,
-    intr_after: u32
+    intr_after: u32,
+    nmi_on_cycle: u32,
 }
 
 impl RemoteCpu {
     pub fn new(
+        cpu_type: CpuType,
         client: CpuClient, 
+        prefetch: bool,
         wait_state_opt: u32, 
         intr_on: u32,
-        intr_after: u32
+        intr_after: u32,
+        nmi_on: u32,
     ) -> RemoteCpu {
 
+        let preload_pgm = if !prefetch {
+            VecDeque::new()
+        }
+        else {
+            log::trace!("Using prefetch program for {:?}", cpu_type);
+            match cpu_type {
+                CpuType::Intel8088 => VecDeque::from(INTEL808X_PRELOAD_PGM),
+                CpuType::NecV20 => VecDeque::from(NECVX0_PRELOAD_PGM),
+            }
+            
+        };
+
+        log::trace!("Size of prefetch program: {}", preload_pgm.len());
+
         RemoteCpu {
+            cpu_type,
             client,
             regs: Default::default(),
             memory: vec![0; ADDRESS_SPACE],
@@ -126,6 +299,10 @@ impl RemoteCpu {
             start_addr: 0,
             end_addr: 0,
             program_state: ProgramState::Reset,
+            run_state: RunState::Init,
+            preload_pgm,
+            preload_pc: 0,
+            address_bus: 0,
             address_latch: 0,
             status: 0,
             command_status: 0,
@@ -144,21 +321,28 @@ impl RemoteCpu {
             queue_first_fetch: true,
             queue_fetch_n: 0,
             queue_fetch_addr: 0,
+            queue_len_at_finalize: 0,
             opcode: 0,
             finalize: false,
             do_nmi: false,
             intr: false,
+            nmi: false,
             halted: false,
             halt_ct: 0,
             wait_state_opt,
             intr_on_cycle: intr_on,
-            intr_after
+            intr_after,
+            nmi_on_cycle: nmi_on,
         }
     }
 
     pub fn reset(&mut self) {
-
+        log::trace!("Resetting!");
         self.program_state = ProgramState::Reset;
+        self.run_state = RunState::default();
+        //self.preload_pgm = VecDeque::new();
+        self.preload_pc = 0;
+        self.address_bus = 0;
         self.address_latch = 0;
         self.status = 0;
         self.command_status = 0;
@@ -175,6 +359,7 @@ impl RemoteCpu {
         self.queue_first_fetch = true;
         self.queue_fetch_n = 0;
         self.queue_fetch_addr = 0;
+        self.queue_len_at_finalize = 0;
         self.opcode = 0;
         self.finalize = false;
         self.do_nmi = false;
@@ -240,7 +425,7 @@ impl RemoteCpu {
     }
 
     /// Return true if this address is an ISR 
-    pub fn is_isr_address(&mut self, address: u32) -> bool {
+    pub fn is_isr_address(&self, address: u32) -> bool {
         
         let isr_start =  RemoteCpu::calc_linear_address(ISR_SEGMENT, 0);
         let isr_end = RemoteCpu::calc_linear_address(ISR_SEGMENT, 256 * 4);
@@ -274,31 +459,53 @@ impl RemoteCpu {
 
         self.reset(); // CPU is reset on register load
 
-        match self.client.load_registers_from_buf(reg_data) {
-            Ok(_) => true,
+        // Adjust registers as needed for CPU prefetch.
+        let mut regs = RemoteCpuRegisters::from(reg_data);
+
+        // Adjust IP by size of preload program.
+        regs.ip = regs.ip.wrapping_sub(self.preload_pgm.len() as u16);
+        
+        if self.preload_pgm.len() > 0 {
+            match self.cpu_type {
+                CpuType::Intel8088 => {
+                    log::trace!("Adjusting registers for 8088 prefetch...");
+                    // (4x stosb)
+
+                    // Adjust DI. This depends on the state of the Direction flag.
+                    if regs.flags & CPU_FLAG_DIRECTION == 0 {
+                        // Direction forward. Decrement DI.
+                        regs.di = regs.di.wrapping_sub(4);
+                    }
+                    else {
+                        // Direction backwards. Increment DI.
+                        regs.di = regs.di.wrapping_add(4);
+                    }
+                }
+                CpuType::NecV20 => {
+                    // No extra register modification required as we use 0x63 with no side effects.
+                }
+            }
+        }
+
+
+        let mut new_reg_data = reg_data.to_vec();
+        RemoteCpuRegisters::to_buf(&mut new_reg_data, &regs);
+
+        match self.client.load_registers_from_buf(&new_reg_data) {
+            Ok(_) => {
+                self.regs = regs;
+                true
+            },
             Err(_) => false
         }
     }
 
     pub fn load_registers_from_struct(&mut self, regs: &RemoteCpuRegisters) -> bool {
 
+        unimplemented!("Don't use this function");
         self.reset(); // CPU is reset on register load
 
         let mut reg_data: [u8; 28] = [0; 28];
-        // ax:    (r[0x00] as u16) | (r[0x01] as u16) << 8,
-        // bx:    (r[0x02] as u16) | (r[0x03] as u16) << 8,
-        // cx:    (r[0x04] as u16) | (r[0x05] as u16) << 8,
-        // dx:    (r[0x06] as u16) | (r[0x07] as u16) << 8,
-        // ss:    (r[0x08] as u16) | (r[0x09] as u16) << 8,
-        // sp:    (r[0x0A] as u16) | (r[0x0B] as u16) << 8,
-        // flags: (r[0x0C] as u16) | (r[0x0D] as u16) << 8,
-        // ip:    (r[0x0E] as u16) | (r[0x0F] as u16) << 8,
-        // cs:    (r[0x10] as u16) | (r[0x11] as u16) << 8,
-        // ds:    (r[0x12] as u16) | (r[0x13] as u16) << 8,
-        // es:    (r[0x14] as u16) | (r[0x15] as u16) << 8,
-        // bp:    (r[0x16] as u16) | (r[0x17] as u16) << 8,
-        // si:    (r[0x18] as u16) | (r[0x19] as u16) << 8,
-        // di:    (r[0x1A] as u16) | (r[0x1B] as u16) << 8,
         reg_data[0] = (regs.ax & 0xFF) as u8;
         reg_data[1] = (regs.ax >> 8) as u8;
         reg_data[2] = (regs.bx & 0xFF) as u8;
@@ -335,14 +542,6 @@ impl RemoteCpu {
     }    
 
     pub fn update_state(&mut self) -> bool {
-        /*
-        self.program_state = self.client.get_program_state().expect("Failed to get program state!");
-        self.status = self.client.read_status().expect("Failed to get status!");
-        self.command_status = self.client.read_8288_command().expect("Failed to get 8288 command status!");
-        self.control_status = self.client.read_8288_control().expect("Failed to get 8288 control status!");
-        self.data_bus = self.client.read_data_bus().expect("Failed to get data bus!");
-        */
-
         (
             self.program_state, 
             self.control_status, 
@@ -354,7 +553,6 @@ impl RemoteCpu {
     }
 
     pub fn get_last_error(&mut self) -> String {
-
         let error_msg = match self.client.get_last_error() {
             Ok(err_str) => err_str,
             Err(err) => format!("Couldn't get error string: {err}")
@@ -363,8 +561,22 @@ impl RemoteCpu {
         error_msg
     }
 
-    pub fn cycle(&mut self) -> bool {
+    /// Return true if the current address latch is within execution bounds.
+    pub fn address_in_bounds(&self) -> bool {
+        let addr = self.address_latch as usize;
+        self.is_isr_address(self.address_latch) || ((addr >= self.start_addr) && (addr < self.end_addr))
+    }
 
+    pub fn in_preload(&self) -> bool {
+        if let RunState::Preload = self.run_state {
+            true
+        }
+        else {
+            false
+        }
+    }
+
+    pub fn cycle(&mut self) -> bool {
         match self.client.cycle() {
             Ok(_) => {}
             Err(e) => {
@@ -386,7 +598,6 @@ impl RemoteCpu {
             }
             BusCycle::T2 => {
                 // If wait states are configured, deassert READY line now
-
                 if self.wait_state_opt > 0 {
                     self.nready_states = self.wait_state_opt;
                     //log::debug!("Deasserting READY to emulate wait states...");
@@ -395,8 +606,6 @@ impl RemoteCpu {
                 BusCycle::T3
             }
             BusCycle::T3 => {
-                // TODO: Handle wait states
-
                 if self.nready_states > 0 {
                     self.nready_states -= 1;
 
@@ -428,16 +637,35 @@ impl RemoteCpu {
                 if self.mcycle_state == BusState::CODE {
                     // We completed a code fetch, so add to prefetch queue
 
-                    if !self.is_isr_address(self.address_latch) 
-                        && ((self.address_latch as usize >= self.end_addr)
-                        || ((self.address_latch as usize) < self.start_addr)) {
-                        // We fetched past the end of the current program, push a flagged NOP into the queue.
-                        // When a byte flagged with Finalize is read we will enter the Finalize state.
-                        self.queue.push(self.data_bus, QueueDataType::Finalize, self.address_latch);
-                    }
-                    else {
-                        // Normal fetch
-                        self.queue.push(self.data_bus, self.data_type, self.address_latch);
+                    match self.run_state {
+                        RunState::Preload => {
+                            if self.have_preload_pgm() {
+                                // Preload program is being fetched.
+                                self.queue.push(self.data_bus, QueueDataType::Preload, self.address_latch);
+                            }
+                            else if self.address_in_bounds() {
+                                log::trace!("program byte pushed to queue");
+                                // We are in preloading state, but have exhausted preload program. Mark the next byte to be put
+                                // in queue to signal start of main program.
+                                self.queue.push(self.data_bus, QueueDataType::Program, self.address_latch);
+                            }
+                            else {
+                                log::trace!("out of instruction bounds byte pushed to queue");
+                                // We are in preloading state, but have exhausted preload program. Mark the next byte to be put
+                                // in queue to signal start of main program.
+                                self.queue.push(self.data_bus, QueueDataType::Finalize, self.address_latch);                                
+                            }
+                            self.advance_preload_pgm();
+                        }
+                        _ if self.address_in_bounds() => {
+                            // Normal fetch within program boundaries
+                            self.queue.push(self.data_bus, self.data_type, self.address_latch);
+                        }
+                        _ => {
+                            // We have fetched past the end of the current program, so push a flagged NOP into the queue.
+                            // When a byte flagged with Finalize is read we will enter the Finalize state.
+                            self.queue.push(self.data_bus, QueueDataType::Finalize, self.address_latch);
+                        }
                     }
                 }
                 BusCycle::T1
@@ -456,7 +684,12 @@ impl RemoteCpu {
                 self.bus_cycle = BusCycle::T1;
             }
 
-            self.address_latch = self.client.read_address_latch().expect("Failed to get address latch!");
+            let addr = self.client.read_address().expect("Failed to get address bus!");
+            self.address_bus = addr;
+            self.address_latch = addr;
+        }
+        else {
+            self.address_bus = self.client.read_address().expect("Failed to get address bus!");
         }
         //log::trace!("state: {:?}", self.program_state);
 
@@ -471,6 +704,8 @@ impl RemoteCpu {
             // MRDC status is active-low.
             if ((self.command_status & COMMAND_MRDC_BIT) == 0) && (self.bus_cycle == BusCycle::T2) {
 
+                let mut write_store = false;
+
                 match self.mcycle_state {
                     BusState::MEMR => {
                         // CPU is reading data from bus. Provide value from memory.
@@ -479,12 +714,19 @@ impl RemoteCpu {
                     BusState::CODE => {
                         // CPU is reading code from bus. Provide value from memory if we are not past the 
                         // end of the program area.
-
-                        if self.address_latch as usize >= self.end_addr {
-                            self.data_bus = OPCODE_NOP;
+                        if self.have_preload_pgm() {
+                            // Feed CPU preload program instead of memory.
+                            self.data_bus = self.get_preload_pgm_byte().unwrap();
+                        }
+                        else if self.address_in_bounds() {
+                            // Within program range.
+                            self.data_bus = self.memory[self.address_latch as usize];
                         }
                         else {
-                            self.data_bus = self.memory[self.address_latch as usize];
+                            // Preloading out of bounds. This terminates execution; so we should start
+                            // feeding the CPU server the store program.
+                            self.data_bus = OPCODE_NOP;
+                            write_store = true;
                         }
                     }                    
                     _ => {
@@ -492,13 +734,20 @@ impl RemoteCpu {
                     }
                 }
 
-                //log::trace!("Reading data bus: {:02X}", self.data_bus);
-                self.client.write_data_bus(self.data_bus).expect("Failed to write data bus.");
+                if write_store {
+                    // Execute prefetch_store command instead of writing to the data bus ourselves.
+                    log::trace!("writing store program to bus");
+                    self.client.prefetch_store().expect("Failed to execute CmdPrefetchStore");
+                }
+                else {
+                    self.client.write_data_bus(self.data_bus).expect("Failed to write data bus.");
+                }
+
             }
 
             // MWTC status is active-low.
             if (self.command_status & COMMAND_MWTC_BIT) == 0 {
-                // CPU is writing to memory. Get data bus from CPU and write to memory..
+                // CPU is writing to memory. Get data bus from CPU and write to host memory.
                 self.data_bus = self.client.read_data_bus().expect("Failed to read data bus.");
                 self.memory[self.address_latch as usize] = self.data_bus;
             }
@@ -546,9 +795,20 @@ impl RemoteCpu {
                         //self.do_nmi = true;
                     }
 
+                    // Does this opcode mark the end of a preload program?
+                    if let RunState::Preload = self.run_state {
+                        if self.queue_type == QueueDataType::Program {
+                            log::trace!("Ending preload!");
+                            self.run_state = RunState::Program;
+                        }
+                    }
+
                     // Is this opcode flagged as the end of execution?
                     if self.queue_type == QueueDataType::Finalize {
-                        
+                        // Save the current queue length - we have to rewind the IP returned by store by this much.
+                        self.queue_len_at_finalize = self.queue.len() as u8;
+                        self.run_state = RunState::Finalize;
+                        log::trace!("Finalizing execution with {} bytes in queue.", self.queue.len());
                         cycle_comment!(self, "Finalizing execution!");
                         self.client.finalize().expect("Failed to finalize!");
                     }
@@ -597,7 +857,17 @@ impl RemoteCpu {
             self.intr = true;            
         }
 
+        // Do cycle-based NMI trigger
+        if self.cycle_num == self.nmi_on_cycle {
+            cycle_comment!(self, "Setting NMI high after cycle #{}", self.intr_on_cycle);
+                            
+            // Set INTR line high
+            self.client.write_pin(CpuPin::NMI, true).expect("Failed to set NMI line high.");
+            self.nmi = true;            
+        }
+
         if self.cycle_num > CYCLE_LIMIT {
+            log::warn!("Hit cycle limit!");
             match self.client.finalize() {
                 Ok(_) => {
                     log::trace!("Finalized execution!");
@@ -611,11 +881,11 @@ impl RemoteCpu {
     }   
 
 
-    pub fn print_cpu_state(&mut self) {
+    pub fn print_cpu_state(&self) {
         println!("{}", self.get_cpu_state_str())
     }
 
-    pub fn get_cpu_state_str(&mut self) -> String {
+    pub fn get_cpu_state_str(&self) -> String {
 
         let ale_str = match self.command_status & COMMAND_ALE_BIT != 0 {
             true => "A:",
@@ -670,7 +940,8 @@ impl RemoteCpu {
         let intr_chr = if self.intr { 'R' } else { '.' };
         let inta_chr = if self.command_status & COMMAND_INTA_BIT == 0 { 'A' } else { '.' };
 
-        let bus_str = match get_bus_state!(self.status) {
+        let bus_state = get_bus_state!(self.status);
+        let bus_str = match bus_state {
             BusState::INTA => "INTA",
             BusState::IOR  => "IOR ",
             BusState::IOW  => "IOW ",
@@ -693,11 +964,13 @@ impl RemoteCpu {
         let is_writing = is_writing!(self.command_status);
 
         let mut xfer_str = "      ".to_string();
-        if is_reading {
-            xfer_str = format!("r-> {:02X}", self.data_bus);
-        }
-        else if is_writing {
-            xfer_str = format!("<-w {:02X}", self.data_bus);
+        if let BusState::PASV = bus_state {
+            if is_reading {
+                xfer_str = format!("r-> {:02X}", self.data_bus);
+            }
+            else if is_writing {
+                xfer_str = format!("<-w {:02X}", self.data_bus);
+            }
         }
 
         // Handle queue activity
@@ -711,7 +984,7 @@ impl RemoteCpu {
 
                 let iret_addr = self.queue_fetch_addr;
                 let isr_base_addr = RemoteCpu::calc_linear_address(ISR_SEGMENT, 0);
-                let isr_number = (iret_addr - isr_base_addr) / 2;
+                let isr_number = (iret_addr.wrapping_sub(isr_base_addr)) / 2;
                 q_read_str = format!("q-> {:02X} | {} @ [{:05X}] ISR:{:02X}", self.queue_byte, opcodes::get_opcode_str(self.opcode, 0, false), self.queue_fetch_addr, isr_number);
             }
             else {
@@ -729,13 +1002,14 @@ impl RemoteCpu {
             }
         }        
       
-        let ccomment = if let Some(comment) = self.cycle_comment.take() { comment } else { "".to_string() };
+        let ccomment = if let Some(comment) = self.cycle_comment.clone() { comment } else { "".to_string() };
 
         format!(
-            "{:08} {:02}[{:05X}] {:02} M:{}{}{} I:{}{}{} P:{}{} {:04} {:02} {:06} {:1}[{:08}] {} {}",
+            "{:08} {:02}[{:05X}:{:05X}] {:02} M:{}{}{} I:{}{}{} P:{}{} {:04} {:02} {:06} {:1}[{:08}] {} {}",
             self.cycle_num,
             ale_str,
             self.address_latch,
+            self.address_bus,
             seg_str,
             rs_chr, aws_chr, ws_chr, ior_chr, aiow_chr, iow_chr,
             intr_chr, inta_chr,
@@ -749,10 +1023,51 @@ impl RemoteCpu {
         )
     }
 
-    pub fn run(&mut self, cycle_limit: u32, print: bool ) -> Result<RemoteCpuRegisters, bool> {
+    /// Return whether we are inside of the preload program.
+    pub fn have_preload_pgm(&self) -> bool {
+        !self.preload_pgm.is_empty()
+    }
+
+    /// Return the next byte of the preload program.
+    pub fn get_preload_pgm_byte(&mut self) -> Option<u8> {
+        self.preload_pgm.front().copied()
+    }
+
+    /// Advance the preload program 'program counter'
+    pub fn advance_preload_pgm(&mut self) -> bool {
+        self.preload_pgm.pop_front().is_some()
+    }
+
+    pub fn print_run_state(&self, print_opts: &PrintOptions) {
+        match self.run_state {
+            RunState::Preload if print_opts.print_preload => {
+                self.print_cpu_state();
+            }
+            RunState::Program if print_opts.print_pgm => {
+                self.print_cpu_state();
+            }
+            RunState::Finalize if print_opts.print_finalize => {
+                self.print_cpu_state();
+            }
+            _ => {}
+        }
+    }
+
+    /// Run the CPU for the specified number of cycles.
+    pub fn run(&mut self, cycle_limit: Option<u32>, print_opts: &PrintOptions ) -> Result<RemoteCpuRegisters, bool> {
+
+        // Set up preload program deque from provided program bytes
+        self.preload_pc = 0;
+        if self.preload_pgm.len() > 0 {
+            log::trace!("Entering Preload run state");
+            self.run_state = RunState::Preload;
+        }
+        else {
+            log::trace!("Entering Program run state");
+            self.run_state = RunState::Program;
+        }
 
         self.address_latch = self.client.read_address_latch().expect("Failed to get address latch!");
-
         self.update_state();
 
         // ALE should be active at start of execution
@@ -760,90 +1075,54 @@ impl RemoteCpu {
             log::warn!("Execution is not starting on T1.");
         }
 
-        if print {
-            self.print_cpu_state();
-        }
+        self.print_run_state(&print_opts);
 
-        while self.cycle_num < cycle_limit {
-            //self.cycle();
-            //if print {
-            //    self.print_cpu_state();
-            //}
-
-            while self.program_state != ProgramState::ExecuteDone {
-                match self.program_state {
-
-                    ProgramState::Execute => {
-                        self.cycle();
-                        if print {
-                            self.print_cpu_state();
-                        }
-                        
-                    }
-                    ProgramState::ExecuteFinalize => {
-                        self.cycle();
-                    }
-                    _=> {
-                        log::error!("Invalid program state: {:?}!", self.program_state);
-                        panic!("Invalid program state!");
-                    }
+        while self.program_state != ProgramState::ExecuteDone {
+            match self.program_state {
+                ProgramState::Execute => {
+                    self.cycle();
+                    self.print_run_state(&print_opts);
+                    self.cycle_comment = None;
                 }
-
-                //log::trace!("Program state: {:?}", self.program_state);
-            }
-
-
-            // Program finalized!
-            log::trace!("Program finalized! Run store now.");
-
-            let regs = self.store();
-
-            let err = self.get_last_error();
-            log::debug!("flagbuf is {}", err);
-            return Ok(regs);
-
-            /*
-            if self.mcycle_state == BusState::CODE && (self.address_latch as usize >= self.end_addr) {
-                // We are fetching past the end of the program. Send a flagged NOP to finalize execution on fetch.
-
-                if self.program_state == ProgramState::Execute {
-                    self.client.finalize().expect("Failed to finalize!");
-    
-                    // Wait for execution to finalize
-                    while self.program_state != ProgramState::ExecuteDone {
-                        self.cycle();
-                        
-                        if self.program_state != ProgramState::ExecuteDone {
-                            self.print_cpu_state();
-                        }
-                    }
-    
-                    // Program finalized!
-                    log::trace!("Program finalized! Run store now.");
-
-                    self.store();
-                    
-                    break;
+                ProgramState::ExecuteFinalize => {
+                    self.cycle();
+                }
+                _=> {
+                    log::error!("Invalid program state: {:?}!", self.program_state);
+                    panic!("Invalid program state!");
                 }
             }
-            */
+
+            //log::trace!("Program state: {:?}", self.program_state);
         }
 
-        Err(false)
+        // Program finalized!
+        log::trace!("Program finalized! Run store now.");
+        let regs = self.store();
+        
+        match regs {
+            Ok(mut regs) => {
+                //regs.adjust_ip(self.queue_len_at_finalize as u16 + 1);
+                Ok(regs)
+            },
+            Err(e) => {
+                log::error!("Failed to store registers: {}", e);
+                Err(false)
+            }
+        }
     }
 
-    pub fn store(&mut self) -> RemoteCpuRegisters {
-
+    /// Command the CPU server to store reisters, and return them as a RemoteCpuRegisters struct.
+    pub fn store(&mut self) -> Result<RemoteCpuRegisters,CpuClientError> {
         let mut buf: [u8; 28] = [0; 28];
-        self.client.store_registers_to_buf(&mut buf).expect("Failed to store registers!");
-
-        let regs = RemoteCpu::buf_to_regs(&buf);
-        //RemoteCpu::print_regs(&regs);
-        regs
+        self.client.store_registers_to_buf(&mut buf)?;
+        let regs = RemoteCpuRegisters::from(&buf);
+        Ok(regs)
     }
 
+    /// Perform a sanity check that we have a valid address latch
+    /// (Debugging use)
     pub fn test(&mut self) -> bool {
-
         let al = match self.client.read_address_latch() {
             Ok(address) => address,
             Err(_) => {
@@ -851,68 +1130,103 @@ impl RemoteCpu {
             }
         };
 
-        log::trace!("Address latch: {:05X}", al);
+        log::trace!("Initial Address Latch: {:05X}", al);
         true
     }
 
-    pub fn buf_to_regs(r: &[u8]) -> RemoteCpuRegisters {
-
-        //println!("{:0x?}", r);
-
-        RemoteCpuRegisters {
-            ax:    (r[0x00] as u16) | ((r[0x01] as u16) << 8),
-            bx:    (r[0x02] as u16) | ((r[0x03] as u16) << 8),
-            cx:    (r[0x04] as u16) | ((r[0x05] as u16) << 8),
-            dx:    (r[0x06] as u16) | ((r[0x07] as u16) << 8),
-            ss:    (r[0x08] as u16) | ((r[0x09] as u16) << 8),
-            sp:    (r[0x0A] as u16) | ((r[0x0B] as u16) << 8),
-            flags: (r[0x0C] as u16) | ((r[0x0D] as u16) << 8),
-            ip:    (r[0x0E] as u16) | ((r[0x0F] as u16) << 8),
-            cs:    (r[0x10] as u16) | ((r[0x11] as u16) << 8),
-            ds:    (r[0x12] as u16) | ((r[0x13] as u16) << 8),
-            es:    (r[0x14] as u16) | ((r[0x15] as u16) << 8),
-            bp:    (r[0x16] as u16) | ((r[0x17] as u16) << 8),
-            si:    (r[0x18] as u16) | ((r[0x19] as u16) << 8),
-            di:    (r[0x1A] as u16) | ((r[0x1B] as u16) << 8),
-        }
+    pub fn print_reg_buf(regbuf: &[u8]) {
+        Self::print_regs(&RemoteCpuRegisters::from(regbuf));
     }
 
     pub fn print_regs(regs: &RemoteCpuRegisters) {
         
         let reg_str = format!(
-          "AX: {:04x} BX: {:04x} CX: {:04x} DX: {:04x}\n\
-          SP: {:04x} BP: {:04x} SI: {:04x} DI: {:04x}\n\
-          CS: {:04x} DS: {:04x} ES: {:04x} SS: {:04x}\n\
-          IP: {:04x}\n\
-          FLAGS: {:04x}",
+          "AX: {:04X} BX: {:04X} CX: {:04X} DX: {:04X}\n\
+          SP: {:04X} BP: {:04X} SI: {:04X} DI: {:04X}\n\
+          CS: {:04X} DS: {:04X} ES: {:04X} SS: {:04X}\n\
+          IP: {:04X}\n\
+          FLAGS: {:04X}",
           regs.ax, regs.bx, regs.cx, regs.dx,
           regs.sp, regs.bp, regs.si, regs.di,
           regs.cs, regs.ds, regs.es, regs.ss,
           regs.ip,
           regs.flags );
       
-        println!("{}", reg_str);
-        /*
+        print!("{} ", reg_str);
+
         // Expand flag info
-        u16 f = regs->flags;
-        char c_chr = CPU_FLAG_CARRY & f ? 'C' : 'c';
-        char p_chr = CPU_FLAG_PARITY & f ? 'P' : 'p';
-        char a_chr = CPU_FLAG_AUX_CARRY & f ? 'A' : 'a';
-        char z_chr = CPU_FLAG_ZERO & f ? 'Z' : 'z';
-        char s_chr = CPU_FLAG_SIGN & f ? 'S' : 's';
-        char t_chr = CPU_FLAG_TRAP & f ? 'T' : 't';
-        char i_chr = CPU_FLAG_INT_ENABLE & f ? 'I' : 'i';
-        char d_chr = CPU_FLAG_DIRECTION & f ? 'D' : 'd';
-        char o_chr = CPU_FLAG_OVERFLOW & f ? 'O' : 'o';
+        let f = regs.flags;
+        let c_chr = if CPU_FLAG_CARRY & f != 0 { 'C' } else { 'c' };
+        let p_chr = if CPU_FLAG_PARITY & f != 0 { 'P' } else { 'p' };
+        let a_chr = if CPU_FLAG_AUX_CARRY & f != 0 { 'A' } else { 'a' };
+        let z_chr = if CPU_FLAG_ZERO & f != 0 { 'Z' } else { 'z' };
+        let s_chr = if CPU_FLAG_SIGN & f != 0 { 'S' } else { 's' };
+        let t_chr = if CPU_FLAG_TRAP & f != 0 { 'T' } else { 't' };
+        let i_chr = if CPU_FLAG_INT_ENABLE & f != 0 { 'I' } else { 'i' };
+        let d_chr = if CPU_FLAG_DIRECTION & f != 0 { 'D' } else { 'd' };
+        let o_chr = if CPU_FLAG_OVERFLOW & f != 0 { 'O' } else { 'o' };
         
-        snprintf(
-          flag_buf, 17,
-          "1111%c%c%c%c%c%c0%c0%c1%c",
+        println!(
+          "1111{}{}{}{}{}{}0{}0{}1{}",
           o_chr, d_chr, i_chr, t_chr, s_chr, z_chr, a_chr, p_chr, c_chr
         );
+    }
+
+    pub fn print_regs_delta(initial: &RemoteCpuRegisters, regs: &RemoteCpuRegisters) {
+        
+        let a_diff = initial.ax != regs.ax;
+        let b_diff = initial.bx != regs.bx;
+        let c_diff = initial.cx != regs.cx;
+        let d_diff = initial.dx != regs.dx;
+        let sp_diff = initial.sp != regs.sp;
+        let bp_diff = initial.bp != regs.bp;
+        let si_diff = initial.si != regs.si;
+        let di_diff = initial.di != regs.di;
+        let cs_diff = initial.cs != regs.cs;
+        let ds_diff = initial.ds != regs.ds;
+        let es_diff = initial.es != regs.es;
+        let ss_diff = initial.ss != regs.ss;
+        let ip_diff = initial.ip != regs.ip;
+        let f_diff = initial.flags != regs.flags;
+
+        let reg_str = format!(
+            "AX:{}{:04X} BX:{}{:04X} CX:{}{:04X} DX:{}{:04X}\n\
+             SP:{}{:04X} BP:{}{:04X} SI:{}{:04X} DI:{}{:04X}\n\
+             CS:{}{:04X} DS:{}{:04X} ES:{}{:04X} SS:{}{:04X}\n\
+             IP: {:04X}\n\
+             FLAGS:{}{:04X}",
+            if a_diff { "*" } else { " " }, regs.ax,
+            if b_diff { "*" } else { " " }, regs.bx,
+            if c_diff { "*" } else { " " }, regs.cx,
+            if d_diff { "*" } else { " " }, regs.dx,
+            if sp_diff { "*" } else { " " }, regs.sp,
+            if bp_diff { "*" } else { " " }, regs.bp,
+            if si_diff { "*" } else { " " }, regs.si,
+            if di_diff { "*" } else { " " }, regs.di,
+            if cs_diff { "*" } else { " " }, regs.cs,
+            if ds_diff { "*" } else { " " }, regs.ds,
+            if es_diff { "*" } else { " " }, regs.es,
+            if ss_diff { "*" } else { " " }, regs.ss,
+            regs.ip,
+            if f_diff { "*" } else { " " }, regs.flags );
       
-        Serial.print("FLAGSINFO: ");
-        Serial.println(flag_buf);
-        */
+        print!("{} ", reg_str);
+
+        // Expand flag info
+        let f = regs.flags;
+        let c_chr = if CPU_FLAG_CARRY & f != 0 { 'C' } else { 'c' };
+        let p_chr = if CPU_FLAG_PARITY & f != 0 { 'P' } else { 'p' };
+        let a_chr = if CPU_FLAG_AUX_CARRY & f != 0 { 'A' } else { 'a' };
+        let z_chr = if CPU_FLAG_ZERO & f != 0 { 'Z' } else { 'z' };
+        let s_chr = if CPU_FLAG_SIGN & f != 0 { 'S' } else { 's' };
+        let t_chr = if CPU_FLAG_TRAP & f != 0 { 'T' } else { 't' };
+        let i_chr = if CPU_FLAG_INT_ENABLE & f != 0 { 'I' } else { 'i' };
+        let d_chr = if CPU_FLAG_DIRECTION & f != 0 { 'D' } else { 'd' };
+        let o_chr = if CPU_FLAG_OVERFLOW & f != 0 { 'O' } else { 'o' };
+        
+        println!(
+          "1111{}{}{}{}{}{}0{}0{}1{}",
+          o_chr, d_chr, i_chr, t_chr, s_chr, z_chr, a_chr, p_chr, c_chr
+        );
     }
 }

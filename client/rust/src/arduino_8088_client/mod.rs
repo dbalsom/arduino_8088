@@ -1,6 +1,5 @@
 #![allow(dead_code, unused_variables)]
-use std::io::{self, Read, Write};
-use std::time::Duration;
+use std::io::{Read, Write};
 use serialport::{SerialPort, ClearBuffer};
 use log;
 
@@ -11,28 +10,32 @@ pub const ARD8088_BAUD: u32 = 1000000;
 
 #[derive(Copy, Clone)]
 pub enum ServerCommand {
-    CmdNull            = 0x00,
-    CmdVersion         = 0x01,
-    CmdReset           = 0x02,
-    CmdLoad            = 0x03,
-    CmdCycle           = 0x04,
-    CmdReadAddress     = 0x05,
-    CmdReadStatus      = 0x06,
-    CmdRead8288Command = 0x07,
-    CmdRead8288Control = 0x08, 
-    CmdReadDataBus     = 0x09,
-    CmdWriteDataBus    = 0x0A,
-    CmdFinalize        = 0x0B,
-    CmdBeginStore      = 0x0C,
-    CmdStore           = 0x0D,
-    CmdQueueLen        = 0x0E,
-    CmdQueueBytes      = 0x0F,
-    CmdWritePin        = 0x10,
-    CmdReadPin         = 0x11,
-    CmdGetProgramState = 0x12,
-    CmdGetLastError    = 0x13,
-    CmdGetCycleState   = 0x14,
-    CmdInvalid         = 0x15,
+                                
+    CmdNull             = 0x00,
+    CmdVersion          = 0x01,
+    CmdReset            = 0x02,
+    CmdLoad             = 0x03,
+    CmdCycle            = 0x04,
+    CmdReadAddressLatch = 0x05,
+    CmdReadStatus       = 0x06,
+    CmdRead8288Command  = 0x07,
+    CmdRead8288Control  = 0x08, 
+    CmdReadDataBus      = 0x09,
+    CmdWriteDataBus     = 0x0A,
+    CmdFinalize         = 0x0B,
+    CmdBeginStore       = 0x0C,
+    CmdStore            = 0x0D,
+    CmdQueueLen         = 0x0E,
+    CmdQueueBytes       = 0x0F,
+    CmdWritePin         = 0x10,
+    CmdReadPin          = 0x11,
+    CmdGetProgramState  = 0x12,
+    CmdGetLastError     = 0x13,
+    CmdGetCycleState    = 0x14,
+    CmdCGetCycleState   = 0x15,
+    CmdPrefetchStore    = 0x16,
+    CmdReadAddressU     = 0x17,
+    CmdInvalid          = 0x18,
 }
 
 #[derive(Debug, PartialEq)]
@@ -86,7 +89,6 @@ pub enum CpuPin {
 }
 
 pub const REQUIRED_PROTOCOL_VER: u8 = 0x01;
-
 
 pub const COMMAND_MRDC_BIT: u8  = 0b0000_0001;
 pub const COMMAND_AMWC_BIT: u8  = 0b0000_0010;
@@ -371,7 +373,7 @@ impl CpuClient {
             Ok(bytes) => {
                 if bytes != buf.len() {
                     // We didn't read entire buffer worth of data, fail
-                    log::error!("recv_buf: Only read {} bytes of 28.", bytes);
+                    log::error!("recv_buf: Only read {} bytes of {}.", bytes, buf.len());
                     Err(CpuClientError::ReadFailure)
                 }
                 else {
@@ -431,7 +433,18 @@ impl CpuClient {
 
     pub fn read_address_latch(&mut self) -> Result<u32, CpuClientError> {
         let mut buf: [u8; 3] = [0; 3];
-        self.send_command_byte(ServerCommand::CmdReadAddress)?;
+        self.send_command_byte(ServerCommand::CmdReadAddressLatch)?;
+        self.recv_buf(&mut buf)?;
+        self.read_result_code()?;
+
+        let address = buf[0] as u32 | (buf[1] as u32) << 8 | (buf[2] as u32) << 16;
+
+        Ok(address)
+    }
+
+    pub fn read_address(&mut self) -> Result<u32, CpuClientError> {
+        let mut buf: [u8; 3] = [0; 3];
+        self.send_command_byte(ServerCommand::CmdReadAddressU)?;
         self.recv_buf(&mut buf)?;
         self.read_result_code()?;
 
@@ -485,6 +498,11 @@ impl CpuClient {
         self.read_result_code()?;
 
         Ok(true)
+    }
+
+    pub fn prefetch_store(&mut self) -> Result<bool, CpuClientError> {
+        self.send_command_byte(ServerCommand::CmdPrefetchStore)?;
+        self.read_result_code()
     }
 
     pub fn finalize(&mut self) -> Result<bool, CpuClientError> {

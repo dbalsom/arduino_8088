@@ -9,27 +9,50 @@ use clap::Parser;
 use crate::arduino_8088_client::*;
 use crate::remote_cpu::*;
 
+
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-   /// Name of the person to greet
-   #[arg(long, required(true))]
-   reg_file: PathBuf,
    
-   #[arg(long, required(true))]
-   bin_file: PathBuf,
+    // The type of CPU connected to the Arduino8088
+    #[arg(long, required(true))]
+    cpu_type: CpuType,
+
+    // The binary file containing the register data. Produced from an assembly 
+    // file 'program_regs.asm'
+    #[arg(long, required(true))]
+    reg_file: PathBuf,
    
-   #[arg(long, required(true))]
-   mount_addr: String,
+    // The binary file containing the code to execute.
+    #[arg(long, required(true))]
+    bin_file: PathBuf,
+   
+    // Specify the address in memory to mount the bin file. This should typically
+    // match the address specified by CS:IP, but doesn't have to...
+    #[arg(long, required(true))]
+    mount_addr: String,
 
-   #[arg(long, required(true))]
-   wait_states: u32,
+    // Specify the number of wait states for every bus transfer.
+    // TODO: Currently no division between memory and IO, should change...
+    #[arg(long, required(true))]
+    wait_states: u32,
 
-   #[arg(long, required(false))]
-   intr_after: u32,
+    // Fill the prefetch queue before executing code.
+    #[arg(long, required(false))]
+    prefetch: bool,
 
-   #[arg(long, required(false))]
-   intr_on: u32,
+    // Raise the INTR line on N cycles after HLT.
+    #[arg(long, required(false))]
+    intr_after: u32,
+
+    // Raise the INTR line on the specified cycle #.
+    #[arg(long, required(false))]
+    intr_on: u32,
+
+    // Raise the NMI line on the specified cycle #.
+    #[arg(long, required(false))]
+    nmi_on: u32,
 }
 
 fn main() {
@@ -39,8 +62,7 @@ fn main() {
     let args = Args::parse();
 
     // Parse commandline arguments
-
-    let reg_bytes = std::fs::read(args.reg_file.clone()).unwrap_or_else(|e| {
+    let mut reg_bytes = std::fs::read(args.reg_file.clone()).unwrap_or_else(|e| {
         eprintln!("Couldn't read register file {:?}: {}", args.reg_file, e);
         std::process::exit(1);
     });
@@ -61,7 +83,6 @@ fn main() {
     }
 
     // Create a cpu_client connection to cpu_server.
-
     let cpu_client = match CpuClient::init() {
         Ok(ard_client) => {
             println!("Opened connection to Arduino_8088 server!");
@@ -75,14 +96,20 @@ fn main() {
 
     // Create a remote cpu instance using the cpu_client which should now be connected.
     let mut cpu = RemoteCpu::new(
+        args.cpu_type,
         cpu_client, 
+        args.prefetch,
         args.wait_states, 
         args.intr_on,
         args.intr_after,
+        args.nmi_on,
     );
 
+    // Capture initial regs before adjustment.
+    let initial_regs = RemoteCpuRegisters::from(reg_bytes.as_slice());
+
     // Copy the binary to memory
-    log::trace!("Mounting program code at: {:05X}", mount_addr);
+    log::debug!("Mounting program code at: {:05X}", mount_addr);
     cpu.mount_bin(&bin_bytes, mount_addr as usize);
 
     // Set up IVR table
@@ -92,10 +119,21 @@ fn main() {
     let result = cpu.load_registers_from_buf(&reg_bytes);
     if result {
         log::trace!("Successfully set up registers!");
-        cpu.test();
-        match cpu.run(100, true) {
+
+        println!("Initial register state:");
+
+        RemoteCpu::print_regs(&initial_regs);
+
+        let print_opts = PrintOptions {
+            print_pgm: true,
+            print_preload: false,
+            print_finalize: true,
+        };
+
+        //cpu.test();
+        match cpu.run(Some(10_000), &print_opts) {
             Ok(regs) => {
-                RemoteCpu::print_regs(&regs);
+                RemoteCpu::print_regs_delta(&initial_regs, &regs);
             }
             Err(_) => {
                 log::error!("Program execution failed!");
@@ -106,6 +144,17 @@ fn main() {
         log::error!("Register setup failed: {}", cpu.get_last_error());
     }
 
+}
+
+pub fn rewind_ip(regs: &mut [u8], amount: u16) {
+
+    // IP is at offset 14 in regs array.
+    let mut ip: u16 = regs[14] as u16 | ((regs[15] as u16) << 8);
+
+    ip = ip.wrapping_sub(amount);
+
+    regs[14] = (ip & 0xFF) as u8;
+    regs[15] = (ip >> 8) as u8;
 }
 
 #[cfg(test)]
@@ -124,11 +173,8 @@ mod tests {
     }
 
     pub fn daa(mut al: u8, mut af: bool, mut cf: bool) -> (u8, bool, bool) {
-
-
         let old_al = al;
         //let mut temp16 = al as u16;
-
         let old_cf = cf;
 
         if (al & 0x0F) > 9 || af {
@@ -178,7 +224,7 @@ mod tests {
         };
 
         // Create a remote cpu instance using the cpu_client which should now be connected.
-        let mut cpu = RemoteCpu::new(cpu_client, 0, 0, 0);
+        let mut cpu = RemoteCpu::new(CpuType::Intel8088, cpu_client, 0, 0, 0, 0);
 
         let mut regs = RemoteCpuRegisters {
             ax: 0,
@@ -209,7 +255,7 @@ mod tests {
             cpu.set_program_bounds(pc, pc+1);
 
             cpu.test();
-            match cpu.run(100, false) {
+            match cpu.run(Some(100), &[], &PrintOptions::default()) {
                 Ok(regs) => {
 
                     println!("Flags: {:04X}", regs.flags);
@@ -243,7 +289,7 @@ mod tests {
         };
 
         // Create a remote cpu instance using the cpu_client which should now be connected.
-        let mut cpu = RemoteCpu::new(cpu_client, 0, 0, 0);
+        let mut cpu = RemoteCpu::new(CpuType::Intel8088, cpu_client, 0, 0, 0, 0);
 
         let cf = true;
 
@@ -289,7 +335,7 @@ mod tests {
                     cpu.set_program_bounds(pc, pc+1);
 
                     cpu.test();
-                    match cpu.run(100, false) {
+                    match cpu.run(Some(100), &[], &PrintOptions::default()) {
                         Ok(regs) => {
 
                             let idx = i +  (256 * af);
@@ -364,7 +410,7 @@ mod tests {
         };
 
         // Create a remote cpu instance using the cpu_client which should now be connected.
-        let mut cpu = RemoteCpu::new(cpu_client, 0, 0, 0);
+        let mut cpu = RemoteCpu::new(CpuType::Intel8088, cpu_client, 0, 0, 0, 0);
 
         let cf = true;
 
@@ -410,7 +456,7 @@ mod tests {
                     cpu.set_program_bounds(pc, pc+1);
 
                     cpu.test();
-                    match cpu.run(100, false) {
+                    match cpu.run(Some(100), &[], &PrintOptions::default()) {
                         Ok(regs) => {
 
                             let idx = i +  (256 * af);
@@ -485,7 +531,7 @@ mod tests {
         };
 
         // Create a remote cpu instance using the cpu_client which should now be connected.
-        let mut cpu = RemoteCpu::new(cpu_client, 0, 0, 0);
+        let mut cpu = RemoteCpu::new(CpuType::Intel8088, cpu_client, 0, 0, 0, 0);
 
         let cf = true;
 
@@ -531,7 +577,7 @@ mod tests {
                     cpu.set_program_bounds(pc, pc+1);
 
                     cpu.test();
-                    match cpu.run(100, false) {
+                    match cpu.run(Some(100), &[], &PrintOptions::default()) {
                         Ok(regs) => {
 
                             let idx = i +  (256 * af);
@@ -600,7 +646,7 @@ mod tests {
         };
 
         // Create a remote cpu instance using the cpu_client which should now be connected.
-        let mut cpu = RemoteCpu::new(cpu_client, 0, 0, 0);
+        let mut cpu = RemoteCpu::new(CpuType::Intel8088, cpu_client, 0, 0, 0, 0);
 
         let cf = true;
 
@@ -646,7 +692,7 @@ mod tests {
                     cpu.set_program_bounds(pc, pc+1);
 
                     cpu.test();
-                    match cpu.run(100, false) {
+                    match cpu.run(Some(100), &[], &PrintOptions::default()) {
                         Ok(regs) => {
 
                             let idx = i +  (256 * af);
