@@ -1,20 +1,24 @@
 /*
-  (C)2023-2024 Daniel Balsom
-  https://github.com/dbalsom/arduino_8088
+    Arduino8088 Copyright 2022-2024 Daniel Balsom
+    https://github.com/dbalsom/arduino_8088
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the “Software”),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
 
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
+    THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER   
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
 */
 #ifndef _ARDUINO8088_H
 #define _ARDUINO8088_H
@@ -31,22 +35,6 @@
 #define ARDUINO_DUE 3
 #define BOARD_TYPE ARDUINO_DUE
 
-// These defines control debugging output for each state.
-#define TRACE_RESET 0
-#define TRACE_VECTOR 0
-#define TRACE_LOAD 0
-#define TRACE_EXECUTE 0
-#define TRACE_STORE 0
-#define DEBUG_STORE 0
-#define TRACE_FINALIZE 0
-#define DEBUG_FINALIZE 0
-
-// Debugging output for queue operations (flushes, regular queue ops are always reported)
-#define TRACE_QUEUE 0
-// Report state changes and time spent in each state
-#define TRACE_STATE 0
-
-
 #if defined(__SAM3X8E__) // If Arduino DUE
 
   #define SERIAL SerialUSB
@@ -57,14 +45,15 @@
   #define FLUSH 
 #elif defined(ARDUINO_GIGA)
 
-  #define SERIAL Serial
+  #define SERIAL SerialUSB
   #define FLUSH 
 #endif
 
 // Determines whether to jump to the specified load segment before executing the load program,
 // or just let the address lines roll over.
 // Enables the JumpVector state.
-// If disabled, user programs shouldn't use the first few k of memory.
+// If disabled, user programs shouldn't use the first few k of memory. 
+// >>> Disabling this is unsupported <<<
 #define USE_LOAD_SEG 1
 
 // Code segment to use for load program. User programs shouldn't jump here.
@@ -158,7 +147,7 @@ typedef enum {
 
 // Strings for printing bus transfer cycles.
 const char *CYCLE_STRINGS[] = {
-  "t1", "t2", "t3", "t4", "tw", "ti"
+  "T1", "T2", "T3", "T4", "Tw", "Ti"
 };
 
 const char *SEGMENT_STRINGS[] = {
@@ -227,20 +216,25 @@ typedef struct cpu {
   bool doing_reset;
   machine_state v_state;
   uint32_t state_begin_time;
+  uint32_t address_bus;
   uint32_t address_latch;
   s_state bus_state_latched; // Bus state latched on T1 and valid for entire bus cycle (immediate bus state goes PASV on T3)
   s_state bus_state; // Bus state is current status of S0-S2 at given cycle (may not be valid)
   t_cycle bus_cycle;
   DATA_BUS_TYPE data_bus;
+  bool prefetching_store;
+  uint8_t reads_during_prefetching_store;
   uint8_t data_type;
   uint8_t status0; // S0-S5, QS0 & QS1
   uint8_t command_bits; // 8288 command outputs
   uint8_t control_bits; // 8288 control outputs
   uint16_t v_pc; // Virtual program counter
+  uint16_t s_pc; // Store program counter
   registers post_regs; // Register state retrieved from Store program
   uint8_t *readback_p;
   Queue queue; // Instruction queue
   uint8_t opcode; // Currently executing opcode
+  const char *mnemonic; // Decoded mnemonic
   uint8_t qb; // Last byte value read from queue
   uint8_t qt; // Last data type read from queue
   bool q_ff; // Did we fetch a first instruction byte from the queue this cycle?
@@ -263,10 +257,10 @@ typedef struct i8288 {
 } Intel8288;
 
 // How many cycles to hold the RESET signal high. Intel says "greater than 4" although 4 seems to work.
-const int RESET_HOLD_CYCLE_COUNT = 7; 
+const int RESET_HOLD_CYCLE_COUNT = 5; 
 // How many cycles it takes to reset the CPU after RESET signal goes low. First ALE should occur after this many cycles.
 const int RESET_CYCLE_COUNT = 7; 
-// If we didn't receive an ALE signal after this many cycles, give up
+// If we didn't see an ALE after this many cycles, give up
 const int RESET_CYCLE_TIMEOUT = 14; 
 
 // ----------------------------- CPU FLAGS ----------------------------------//
@@ -628,6 +622,7 @@ void data_bus_write(DATA_BUS_TYPE byte);
 DATA_BUS_TYPE data_bus_read();
 
 void latch_address();
+void read_address();
 void read_status0();
 bool cpu_reset();
 

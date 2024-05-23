@@ -1,34 +1,67 @@
 /*
-  (C)2023 Daniel Balsom
-  https://github.com/dbalsom/arduino_8088
+    Arduino8088 Copyright 2022-2024 Daniel Balsom
+    https://github.com/dbalsom/arduino_8088
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the “Software”),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
 
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
+    THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER   
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
 */
 #ifndef _CPU_SERVER_H
 #define _CPU_SERVER_H
 
-#define BAUD_RATE 1000000
-#define DEBUG_BAUD_RATE 1000000
+// Baud rate is ignored for Arduino DUE as it uses native SerialUSB.
 //#define BAUD_RATE 460800
+#define BAUD_RATE 1000000
+
+// Debug baud rate controls Serial1 speed. Check the documentation of your RS232 interface
+// for maximum rated speed. Exceeding it will cause dropped characters or other corruption.
+//#define DEBUG_BAUD_RATE 230400
+#define DEBUG_BAUD_RATE 460800
 
 #define CMD_TIMEOUT 100 // Command timeout in milliseconds
 #define MAX_COMMAND_BYTES 28 // Maximum length of command parameter input
 
 #define MODE_ASCII 0 // Use ASCII response codes (for interactive debugging only, client won't support)
+
+// Print a dot to the debugging output on each load.
+#define LOAD_INDICATOR 1
+#define STORE_INDICATOR 1
+
+#define TRACE_ALL 0
+
+// These defines control tracing and debugging output for each state.
+// Note: tracing a STORE operation will likely cause it to timeout on the client.
+#define TRACE_RESET 0
+#define DEBUG_RESET 0
+#define TRACE_VECTOR 0
+#define TRACE_LOAD 0
+#define TRACE_EXECUTE 0
+#define TRACE_STORE 0
+#define DEBUG_STORE 0
+#define TRACE_FINALIZE 0
+#define DEBUG_FINALIZE 0
+#define DEBUG_INSTR 0 // Print instruction mnemonics as they are executed from queue
+
+// Debugging output for queue operations (flushes, regular queue ops are always reported)
+#define TRACE_QUEUE 0
+// Report state changes and time spent in each state
+#define TRACE_STATE 0
 #define DEBUG_PROTO 0 // Insert debugging messages into serial output (Escaped by ##...##)
-#define DEBUG_CMD 0 
+#define DEBUG_CMD 0
 
 #define MAX_ERR_LEN 50 // Maximum length of an error string
 
@@ -51,7 +84,7 @@ typedef enum {
   CmdReset           = 0x02,
   CmdLoad            = 0x03,
   CmdCycle           = 0x04,
-  CmdReadAddress     = 0x05,
+  CmdReadAddressLatch= 0x05,
   CmdReadStatus      = 0x06,
   CmdRead8288Command = 0x07,
   CmdRead8288Control = 0x08, 
@@ -68,7 +101,9 @@ typedef enum {
   CmdLastError       = 0x13,
   CmdGetCycleState   = 0x14,
   CmdCycleGetCycleState = 0x15,
-  CmdInvalid         = 0x16,
+  CmdPrefetchStore   = 0x16,
+  CmdReadAddress     = 0x17,
+  CmdInvalid         = 0x18,
 } server_command;
 
 const char *CMD_STRINGS[] = {
@@ -77,7 +112,7 @@ const char *CMD_STRINGS[] = {
   "RESET",
   "LOAD",
   "CYCLE",
-  "READADDR",
+  "READADDRLATCH",
   "READSTATUS",
   "READ8288CMD",
   "READ8288CTRL",
@@ -94,7 +129,9 @@ const char *CMD_STRINGS[] = {
   "GETLASTERR",
   "GETCYCLESTATE",
   "CGETCYCLESTATE",
-  "INVALID"
+  "PREFETCHSTORE",
+  "READADDRBUS",
+  "INVALID",
 };
 
 typedef bool (*command_func)();
@@ -109,7 +146,7 @@ const uint8_t CMD_ALIASES[] = {
   'r', // CmdReset
   'l', // CmdLoad
   'c', // CmdCycle
-  'a', // CmdReadAddress
+  'a', // CmdReadAddressLatch
   's', // CmdReadStatus
   't', // CmdRead8288Command
   'u', // CmdRead8288Control
@@ -125,6 +162,8 @@ const uint8_t CMD_ALIASES[] = {
   'g', // CmdGetProgramState
   'e', // CmdGetLastError
   'f', // CmdGetCycleStatus
+  'k', // CmdPrefetchStore
+  'i', // CmdReadAddress
   0 // CmdInvalid
 };
 
@@ -144,7 +183,7 @@ const uint8_t CMD_INPUTS[] = {
   0,  // CmdReset
   28, // CmdLoad
   0,  // CmdCycle
-  0,  // CmdReadAddress
+  0,  // CmdReadAddressLatch
   0,  // CmdReadStatus
   0,  // CmdRead8288Command 
   0,  // CmdRead8288Control 
@@ -161,7 +200,9 @@ const uint8_t CMD_INPUTS[] = {
   0,  // CmdGetLastError,
   0,  // CmdGetCycleState,
   0,  // CmdCycleGetCycleState,
-  0   // CmdInvalid
+  0,  // CmdPrefetchStore,
+  0,  // CmdReadAddress
+  0,  // CmdInvalid
 };
 
 typedef enum {
@@ -182,7 +223,7 @@ bool cmd_version(void);
 bool cmd_reset(void);
 bool cmd_load(void);
 bool cmd_cycle(void);
-bool cmd_read_address(void);
+bool cmd_read_address_latch(void);
 bool cmd_read_status(void);
 bool cmd_read_8288_command(void);
 bool cmd_read_8288_control(void);
@@ -199,5 +240,8 @@ bool cmd_get_program_state(void);
 bool cmd_get_last_error(void);
 bool cmd_get_cycle_state(void);
 bool cmd_cycle_get_cycle_state(void);
+bool cmd_prefetch_store(void);
+bool cmd_read_address(void);
+bool cmd_invalid(void);
 
 #endif

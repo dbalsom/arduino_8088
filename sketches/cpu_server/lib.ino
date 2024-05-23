@@ -1,22 +1,25 @@
 /*
-  (C)2023-2024 Daniel Balsom
-  https://github.com/dbalsom/arduino_8088
+    Arduino8088 Copyright 2022-2024 Daniel Balsom
+    https://github.com/dbalsom/arduino_8088
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the “Software”),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
 
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
+    THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER   
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
 */
-
 #include "arduino8088.h"
 
 uint32_t calc_flat_address(uint16_t seg, uint16_t offset) {
@@ -209,15 +212,56 @@ DATA_BUS_TYPE data_bus_read() {
   #endif
 }
 
+// Read what value is being output on the data bus
+DATA_BUS_TYPE data_bus_peek() {
+
+  #if defined(__SAM3X8E__) // If Arduino DUE  
+    uint8_t data = 0;
+
+    // Read data from bus pins
+    data |= (PIOB->PIO_ODSR & BIT26) ? 0x01 : 0x00;     // Pin 22, Bit 0 of byte
+    data |= (PIOA->PIO_ODSR & BIT14) ? 0x02 : 0x00;     // Pin 23, Bit 1 of byte
+    data |= (PIOA->PIO_ODSR & BIT15) ? 0x04 : 0x00;     // Pin 24, Bit 2 of byte
+    data |= (PIOD->PIO_ODSR & BIT00) ? 0x08 : 0x00;     // Pin 25, Bit 3 of byte
+    data |= (PIOD->PIO_ODSR & BIT01) ? 0x10 : 0x00;     // Pin 26, Bit 4 of byte
+    data |= (PIOD->PIO_ODSR & BIT02) ? 0x20 : 0x00;     // Pin 27, Bit 5 of byte
+    data |= (PIOD->PIO_ODSR & BIT03) ? 0x40 : 0x00;     // Pin 28, Bit 6 of byte
+    data |= (PIOD->PIO_ODSR & BIT06) ? 0x80 : 0x00;     // Pin 29, Bit 7 of byte
+
+    #if(DATA_BUS_SIZE == 2)
+    data |= PIOD->PIO_ODSR & BIT09 ? 0x0100 : 0x0000;   // AD8 Pin 30 (PD9)
+    data |= PIOA->PIO_ODSR & BIT07 ? 0x0200 : 0x0000;   // AD9 Pin 31 (PA7)
+    data |= PIOD->PIO_ODSR & BIT10 ? 0x0400 : 0x0000;   // AD10 Pin 32 (PD10)
+    data |= PIOC->PIO_ODSR & BIT01 ? 0x0800 : 0x0000;   // AD11 Pin 33 (PC1)
+    data |= PIOC->PIO_ODSR & BIT02 ? 0x1000 : 0x0000;   // AD12 Pin 34 (PC2)
+    data |= PIOC->PIO_ODSR & BIT03 ? 0x2000 : 0x0000;   // AD13 Pin 35 (PC3)
+    data |= PIOC->PIO_ODSR & BIT04 ? 0x4000 : 0x0000;   // AD14 Pin 36 (PC4)
+    data |= PIOC->PIO_ODSR & BIT05 ? 0x8000 : 0x0000;   // AD15 Pin 37 (PC5)
+    #endif
+
+    return data;
+
+  #elif defined(__AVR_ATmega2560__) // If Arduino MEGA  
+    // Read byte from data bus pins 22-29
+    return PINA;
+  #endif
+}
+
+void read_address() {
+  CPU.address_bus = read_address_pins();
+}
+
 void latch_address() {
-  CPU.address_latch = read_address();
+  uint32_t addr = read_address_pins();
+  CPU.address_bus = addr;
+  CPU.address_latch = addr;
 }
 
 /*
-  Read the address pins and store the 20-bit value in global ADDRESS_LATCH.
-  Only valid while ALE is HIGH.
+  Read the address pins and return the 20 bit value in a uint32
+  Note: address is only valid while ALE is HIGH (on T1) Otherwise mutiplexed with status and data.
 */
-uint32_t read_address() {
+uint32_t read_address_pins() {
 
   uint32_t address = 0;
 
@@ -406,11 +450,19 @@ bool cpu_reset() {
     if (READ_ALE_PIN) {
       // ALE is active! CPU has successfully reset
       CPU.doing_reset = false;
+      #if DEBUG_RESET
+        Serial1.println("###############");
+        Serial1.println("## Reset CPU ##");
+        Serial1.println("###############");
+      #endif
       return true;
     }
   }
 
   // ALE did not turn on within the specified cycle timeout, so we failed to reset the cpu.
+  #if DEBUG_RESET
+    Serial1.println("## Failed to reset CPU! ##");
+  #endif
   set_error("CPU failed to reset: No ALE!");   
   return false;
 }

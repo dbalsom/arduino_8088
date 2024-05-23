@@ -1,20 +1,24 @@
 /*
-  (C)2023-2024 Daniel Balsom
-  https://github.com/dbalsom/arduino_8088
+    Arduino8088 Copyright 2022-2024 Daniel Balsom
+    https://github.com/dbalsom/arduino_8088
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the “Software”),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
 
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
+    THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER   
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
 */
 #include <Arduino.h>
 #include "arduino8088.h"
@@ -70,7 +74,11 @@ size_t LOAD_IP = 0x3A;
 size_t LOAD_CS = 0x3C;
 
 // Register store routine.
+// Four NOPs have been padded to the front of the STORE routine to hide it from appearing in cycle
+// traces (although we'd need 6 for 8086...). 
+// We can probably think of a better way to hide STORE program bytes, as this adds several cycles.
 const uint8_t STORE_PROGRAM[] = {
+  0x90, 0x90, 0x90, 0x90,
   0xE7, 0xFE, 0x89, 0xD8, 0xE7, 0xFE, 0x89, 0xC8, 0xE7, 0xFE, 0x89, 0xD0, 0xE7, 0xFE, 0x8C, 0xD0,
   0xE7, 0xFE, 0x89, 0xE0, 0xE7, 0xFE, 0xB8, 0x00, 0x00, 0x8E, 0xD0, 0xB8, 0x04, 0x00, 0x89, 0xC4,
   0x9C, 0xE8, 0x00, 0x00, 0x8C, 0xC8, 0xE7, 0xFE, 0x8C, 0xD8, 0xE7, 0xFE, 0x8C, 0xC0, 0xE7, 0xFE,
@@ -84,7 +92,7 @@ command_func V_TABLE[] = {
   &cmd_reset,
   &cmd_load,
   &cmd_cycle,
-  &cmd_read_address,
+  &cmd_read_address_latch,
   &cmd_read_status,
   &cmd_read_8288_command,
   &cmd_read_8288_control,
@@ -100,7 +108,10 @@ command_func V_TABLE[] = {
   &cmd_get_program_state,
   &cmd_get_last_error,
   &cmd_get_cycle_state,
-  &cmd_cycle_get_cycle_state
+  &cmd_cycle_get_cycle_state,
+  &cmd_prefetch_store,
+  &cmd_read_address,
+  &cmd_invalid
 };
 
 const size_t MAX_CMD = (sizeof V_TABLE / sizeof (command_func));
@@ -142,13 +153,22 @@ void setup() {
 
   beep(100);
   Serial1.println("Arduino8088 Server Initialized!");
-  set_error("NO ERROR");
+  clear_error();
   
   SERVER.c_state = WaitingForCommand;
 }
 
+void clear_error() {
+  strncpy(LAST_ERR, "No error", MAX_ERR_LEN - 1);
+}
+
 void set_error(const char *msg) {
   strncpy(LAST_ERR, msg, MAX_ERR_LEN - 1);
+  Serial1.println("");
+  Serial1.println("************ ERROR ************");
+  Serial1.println(LAST_ERR);
+  Serial1.println("*******************************");
+  error_beep();
 }
 
 // Send a failure code byte in reponse to a failed command
@@ -282,13 +302,16 @@ bool cmd_load() {
     }
   }
 
+  #if LOAD_INDICATOR
+    Serial1.print(".");
+  #endif
   debug_proto("LOAD DONE");
   return true;
 }
 
-// Server command - ReadAddress
+// Server command - ReadAddressLatch
 // Read back the contents of the address latch as a sequence of 3 bytes (little-endian)
-bool cmd_read_address() {
+bool cmd_read_address_latch() {
   static char buf[7];
 
   #if MODE_ASCII  
@@ -308,6 +331,36 @@ bool cmd_read_address() {
   #endif
 
   return true;
+}
+
+// Server command - ReadAddress
+// Read back the contents of the address bus as a sequence of 3 bytes (little-endian)
+bool cmd_read_address() {
+  read_address();
+  static char buf[7];
+
+  #if MODE_ASCII  
+    //buf[0] = 0;
+    snprintf(
+      buf, 7, 
+      "%02X%02X%02X",
+      (int)(CPU.address_bus & 0xFF),
+      (int)((CPU.address_bus >> 8) & 0xFF),
+      (int)((CPU.address_bus >> 16) & 0xFF)
+    );
+    SERIAL.print(buf);
+  #else
+    SERIAL.write((uint8_t)(CPU.address_bus & 0xFF));
+    SERIAL.write((uint8_t)((CPU.address_bus >> 8) & 0xFF));
+    SERIAL.write((uint8_t)((CPU.address_bus >> 16) & 0xFF));
+  #endif
+
+  return true;
+}
+
+bool cmd_invalid() {
+  Serial1.println("Called cmd_invalid!");
+  return false;
 }
 
 // Server command - ReadStatus
@@ -365,9 +418,48 @@ bool cmd_read_data_bus() {
 
 // Server command - WriteDataBus
 // Takes argument of 1 byte
+// Writes the specified byte to the data bus.
+// This should not be called for CODE fetches after we have called cmd_prefetch_store(), 
+// unless a flow control operation occurs that flushes the queue and returns us to 
+// within original program boundaries.
 bool cmd_write_data_bus() {
+  if (CPU.bus_state_latched == CODE) {
+    // We've just been instructed to write a normal fetch byte to the bus.
+    // If we were prefetching the store program, reset this status as a queue
+    // flush must have executed (or we goofed up...)
+    CPU.prefetching_store = false;
+    CPU.s_pc = 0;
+  }
+
+
   CPU.data_bus = COMMAND_BUFFER[0];
   CPU.data_type = DATA_PROGRAM;
+  return true;
+}
+
+// Server command - PrefetchStore
+// Instructs the CPU server to load the next byte of the store program early
+// Should be called in place of cmd_write_data_bus() by host on T3/TwLast when 
+// program bytes have been exhausted.
+// (When we are prefetching past execution boundaries during main program execution)
+bool cmd_prefetch_store() {
+  if (CPU.s_pc >= sizeof STORE_PROGRAM) {
+    set_error("Store program underflow");
+    return false;
+  }
+  CPU.prefetching_store = true;
+  CPU.data_bus = STORE_PROGRAM[CPU.s_pc];
+  // s_pc is advanced during cycle() to avoid duplicated increments
+  #if DEBUG_STORE
+    Serial1.print("## PREFETCH_STORE: s_pc: ");
+    Serial1.print(CPU.s_pc);
+    Serial1.print(" addr: ");
+    Serial1.print(CPU.address_latch, 16);
+    Serial1.print(" byte: ");
+    Serial1.println(STORE_PROGRAM[CPU.s_pc], 16);
+  #endif
+
+  CPU.data_type = DATA_PROGRAM_END;
   return true;
 }
 
@@ -383,9 +475,8 @@ bool cmd_finalize() {
     while(CPU.v_state != ExecuteDone) {
       cycle();
       execute_timeout++;
-
       if(execute_timeout > FINALIZE_TIMEOUT) {
-        Serial1.println("cmd_finalize: state timeout");
+        set_error("cmd_finalize: state timeout");
         return false;
       }
     }
@@ -393,7 +484,7 @@ bool cmd_finalize() {
   }
   else {
     error_beep();
-    Serial1.print("cmd_finalize: wrong state: ");
+    set_error("cmd_finalize: wrong state: ");
     Serial1.println(CPU.v_state);
     return false;
   }
@@ -425,12 +516,16 @@ bool cmd_begin_store(void) {
 // Execute state must be in StoreDone before executing Store command
 bool cmd_store(void) {
 
+  #if DEBUG_STORE
+    Serial1.print("IN STORE: s_pc is: ");
+    Serial1.println(CPU.s_pc);
+  #endif
+
   char err_msg[30];
   // Command only valid in Store
   if(CPU.v_state != ExecuteDone) {
-    Serial1.println("Store: Not in ExecuteDone state!");
     snprintf(err_msg, 30, "Store: Wrong state: %d ", CPU.v_state);
-    error_beep();
+
     set_error(err_msg);
     return false;
   }
@@ -445,6 +540,7 @@ bool cmd_store(void) {
     store_timeout++;
 
     if (store_timeout > 500) {
+      Serial1.println("## STORE: Timeout! ##");
       snprintf(err_msg, 30, "StoreDone timeout.");
       error_beep();
       return false;
@@ -457,6 +553,9 @@ bool cmd_store(void) {
     SERIAL.write(reg_p[i]);
   }
 
+  #if STORE_INDICATOR
+    Serial1.print("?");
+  #endif
   change_state(Done);
   return true;
 }
@@ -706,14 +805,23 @@ void print_cpu_state() {
 
   // Make string for bus reads and writes
   op_buf[0] = 0;
-  if(!READ_MRDC_PIN || !READ_IORC_PIN) {
-    snprintf(op_buf, op_len, "<-r %0*X", DATA_BUS_SIZE * 2, CPU.data_bus);
+  if ((!READ_MRDC_PIN || !READ_IORC_PIN) && CPU.bus_state == PASV) {
+    snprintf(op_buf, op_len, "<-r %0*X", DATA_BUS_SIZE * 2, data_bus_peek());
   }
   if(!READ_MWTC_PIN || !READ_IOWC_PIN) {
     snprintf(op_buf, op_len, "w-> %0*X", DATA_BUS_SIZE * 2, CPU.data_bus);
   }
 
   const char *q_str = queue_to_string();
+
+  const char *t_str;
+  if ((CPU.bus_cycle == T1) && (CPU.bus_state == PASV)) {
+    // Convert T1 to Ti when passive bus
+    t_str = "Ti";
+  }
+  else {
+    t_str = CYCLE_STRINGS[(size_t)CPU.bus_cycle];
+  }
 
   snprintf(
     buf, 81, 
@@ -727,7 +835,7 @@ void print_cpu_state() {
     rs_chr, aws_chr, ws_chr,
     ior_chr, aiow_chr, iow_chr,
     BUS_STATE_STRINGS[(size_t)CPU.bus_state],
-    CYCLE_STRINGS[(size_t)CPU.bus_cycle], 
+    t_str, 
     st_str,
     4 + (DATA_BUS_SIZE * 2),
     op_buf,
@@ -763,8 +871,10 @@ void change_state(machine_state new_state) {
     case Reset:
       CPU.doing_reset = true;    
       CPU.v_pc = 0;
+      CPU.s_pc = 0;
       break;
     case JumpVector:
+      CPU.doing_reset = false;
       CPU.v_pc = 0;
       break;
     case Load:
@@ -775,13 +885,13 @@ void change_state(machine_state new_state) {
       break;
     case Execute:
       CPU.v_pc = 0;
+      CPU.s_pc = 0;
       break;
     case ExecuteFinalize:
       break;
     case ExecuteDone:
       break;
     case Store:
-      CPU.v_pc = 0;
       // Take a raw uint8_t pointer to the register struct. Both x86 and Arduino are little-endian,
       // so we can write raw incoming data over the struct. Faster than logic required to set
       // specific members. 
@@ -813,38 +923,55 @@ void change_state(machine_state new_state) {
 
 void cycle() {
 
+  // First, tick the CPU and increment cycle count
   clock_tick();
-  read_status0();
-
   CYCLE_NUM++;
   if(CYCLE_NUM == 0) {
     // overflow
     CYCLE_NUM_H++;
   }
 
-  if(!CPU.doing_reset) {
-    switch(CPU.bus_cycle) {
-      case T1:
-        // Begin a bus cycle only if signalled, otherwise wait in T1
-        if(CPU.bus_state != PASV) {
-          CPU.bus_cycle = T2;
-        }
-        // Capture the state of the transfer cycle in T1, as the state will go passive T3-T4
-        CPU.bus_state_latched = (s_state)(CPU.status0 & 0x07);    
-        break;
+  // Read the CPU status pins
+  read_status0();
 
-      case T2:
-        CPU.bus_cycle = T3;
-        break;
+  // bus_state is the instantaneous state per cycle. May not always be valid. 
+  // for state of the current bus transfer use bus_state_latched
+  CPU.bus_state = (s_state)(CPU.status0 & 0x07);
 
-      case T3:
-        // TODO: Handle wait states between t3 & t4
-        CPU.bus_cycle = T4;
-        break;
+  // Extract QS0-QS1 queue status
+  uint8_t q = (CPU.status0 >> 6) & 0x03;
+  CPU.qb = 0xFF;
+  CPU.q_ff = false;
 
-      case T4:
-        // Did we complete a code fetch? If so, increment queue len
-        if(CPU.bus_state_latched == CODE) {
+  if(READ_ALE_PIN) {
+    // ALE signals start of bus cycle, so set cycle to t1.
+    CPU.bus_cycle = T1;
+    // Address lines are only valid when ALE is high, so latch address now.
+    latch_address();
+    CPU.bus_state_latched = CPU.bus_state; 
+    //Serial1.print("## LATCHED ADDRESS: ");
+    //Serial1.println(CPU.address_latch);
+  }
+
+  // Operate current T-state
+  switch(CPU.bus_cycle) {
+    case T1:
+      break;
+
+    case T2:
+      break;
+
+    case T3:
+      break;
+
+    case T4:
+      // Did we complete a code fetch? If so, increment queue len
+      if(CPU.bus_state_latched == CODE) {
+        //Serial1.print("## T4 of CODE fetch. Q is: ");
+        //Serial1.println(q);
+
+        if(q == QUEUE_FLUSHED) {
+          Serial1.println("## Queue flush during T4. Supressing queue push.");
           if(CPU.queue.len < QUEUE_MAX) {
             push_queue(CPU.data_bus, CPU.data_type);
           }
@@ -853,20 +980,20 @@ void cycle() {
             Serial1.println("## Error: Invalid Queue Length++ ##");
           }
         }
-        CPU.bus_cycle = T1;
-        break;
-    }
+        else {
+          if(CPU.queue.len < QUEUE_MAX) {
+            push_queue(CPU.data_bus, CPU.data_type);
+          }
+          else {
+            // Shouldn't be here
+            Serial1.println("## Error: Invalid Queue Length++ ##");
+          }
+        }
+      }
+      CPU.bus_state_latched = PASV;
+      break;
   }
 
-  read_status0();
-  // bus_state is the instantaneous state per cycle. May not always be valid. 
-  // for state of the current bus transfer use transfer_state
-  CPU.bus_state = (s_state)(CPU.status0 & 0x07);
-
-  // Check QS0-QS1 queue status bits
-  uint8_t q = (CPU.status0 >> 6) & 0x03;
-  CPU.qb = 0xFF;
-  CPU.q_ff = false;
 
   // Handle queue activity
   if((q == QUEUE_FIRST) || (q == QUEUE_SUBSEQUENT)) {
@@ -878,8 +1005,25 @@ void cycle() {
         CPU.q_ff = true;
         CPU.q_fn = 0; // First byte of instruction
         CPU.opcode = CPU.qb;
+        CPU.mnemonic = get_opcode_str(CPU.opcode, 0, false);
+        #if DEBUG_INSTR
+          if (!IS_GRP_OP(CPU.opcode)) {
+            Serial1.print("INST: ");
+            Serial1.println(CPU.mnemonic);
+          }
+          else {
+            Serial1.println("INST: Decoding GRP...");
+          }
+        #endif
       }
       else {
+        if(IS_GRP_OP(CPU.opcode) && CPU.q_fn == 1) {
+          CPU.mnemonic = get_opcode_str(CPU.opcode, CPU.qb, true);
+          #if DEBUG_INSTR 
+            Serial1.print("INST: ");
+            Serial1.println(CPU.mnemonic);
+          #endif
+        }
         // Subsequent byte of instruction fetched
         CPU.q_fn++;
       }
@@ -889,7 +1033,55 @@ void cycle() {
     }
   }
   else if(q == QUEUE_FLUSHED) {
-    // Queue was flushed last cycle
+    // Queue was flushed last cycle.
+
+    // Warn if queue is flushed during CODE cycle.
+    if (CPU.bus_state_latched == CODE) {
+        Serial1.print("## FLUSH during CODE fetch! t-state: ");
+        switch (CPU.bus_cycle) {
+          case T1:
+            Serial1.println("T1");
+            break;
+          case T2:
+            Serial1.println("T2");
+            break;
+          case T3:
+            Serial1.println("T3");
+            break;
+          case T4:
+            Serial1.println("T4");
+            break;
+        }
+    }
+
+    // The queue is flushed once during store program, so we need to adjust s_pc 
+    // by the length of the queue when it was flushed or else we'll skip bytes
+    // of the store program.
+    if (CPU.s_pc > 0) {
+
+      if (CPU.s_pc < 4) {
+        #if DEBUG_STORE
+          Serial1.println("## FLUSHed STORE bytes (early): Reset s_pc");
+        #endif
+        CPU.s_pc = 0;
+      }
+      else if (CPU.s_pc >= CPU.queue.len) {
+        CPU.s_pc -= CPU.queue.len;
+        #if DEBUG_STORE
+          Serial1.print("## FLUSHed STORE bytes: Adjusted s_pc by queue_len: ");
+          Serial1.print(CPU.queue.len);
+          Serial1.print(" new s_pc: ");
+          Serial1.println(CPU.s_pc);
+        #endif
+      }
+      else {
+        #if DEBUG_STORE
+          Serial1.print("## FLUSHed STORE bytes: Reset s_pc on flush");
+        #endif
+        CPU.s_pc = 0;
+      }
+    }
+
     empty_queue();
 
     #if TRACE_QUEUE
@@ -897,15 +1089,6 @@ void cycle() {
       SERIAL.print("## PC: ");
       SERIAL.println(CPU.v_pc);
     #endif
-  }
-
-  if(READ_ALE_PIN) {
-    // ALE signals start of bus cycle, so set cycle to t1.
-    CPU.bus_cycle = T1;
-    // Address lines are only valid when ALE is high, so latch address now.
-    latch_address();
-    //Serial1.print("## LATCHED ADDRESS: ");
-    //Serial1.println(CPU.address_latch);
   }
 
   switch(CPU.v_state) {
@@ -1020,10 +1203,20 @@ void cycle() {
     // other end conditions are possible.
     case Execute:
     
-      if(!READ_MRDC_PIN || !READ_IORC_PIN) {
+      if ((!READ_MRDC_PIN || !READ_IORC_PIN) && CPU.bus_state == PASV) {
         // CPU is reading from data bus. We assume that the client has called CmdWriteDataBus to set 
         // the value of CPU.data_bus. Write it.
         data_bus_write(CPU.data_bus);
+
+        if ((CPU.bus_state_latched == CODE) && (CPU.prefetching_store)) {
+          CPU.s_pc++;
+          #if DEBUG_STORE
+            Serial1.print("STORE: Wrote STORE PGM BYTE to bus: ");
+            Serial1.print(CPU.data_bus, 16);
+            Serial1.print(" new s_pc: ");
+            Serial1.println(CPU.s_pc);
+          #endif
+        }
       }
     
       if(!READ_MWTC_PIN || !READ_IOWC_PIN) {
@@ -1035,19 +1228,26 @@ void cycle() {
 
     // The ExecuteFinalize state is unique to the cpu_server. Since Execute is now an interactive state,
     // we need to be able to transition safely from Execute to Store. ExecuteState feeds the CPU
-    // NOP code bytes flagged with DATA_PROGRAM_END and transitions to Store when one of those bytes
+    // STORE program bytes flagged with DATA_PROGRAM_END and transitions to Store when one of those bytes
     // is fetched as the first byte of an instruction.
     case ExecuteFinalize:
       
-      if(!READ_MRDC_PIN) {
+      if (!READ_MRDC_PIN && CPU.bus_state == PASV) {
         // CPU is reading (MRDC active-low)
-        if(CPU.bus_state_latched == CODE) {
-          // CPU is reading code byte, give it a flagged NOP
-          CPU.data_bus = OPCODE_NOP;
+        if ((CPU.bus_state_latched == CODE) && (CPU.prefetching_store)) {
+          // Since client does not cycle the CPU in this state, we have to fetch from 
+          // STORE program ourselves
+          CPU.data_bus = STORE_PROGRAM[CPU.s_pc++];
           CPU.data_type = DATA_PROGRAM_END;
-          #if DEBUG_FINALIZE
-            Serial1.println("** Writing NOP in finalize **");
+          data_bus_write(CPU.data_bus);
+          #if DEBUG_STORE
+            Serial1.print("STORE: Wrote STORE PGM BYTE to bus (in FINALIZE): ");
+            Serial1.print(CPU.data_bus, 16);
+            Serial1.print(" new s_pc: ");
+            Serial1.println(CPU.s_pc);
           #endif
+        }
+        else {
           data_bus_write(CPU.data_bus);
         }
       }
@@ -1062,6 +1262,28 @@ void cycle() {
     case ExecuteDone:
       // We sit in ExecuteDone state until the client requests a Store operation.
       // The client should not cycle the CPU in this state.
+      if (!READ_MRDC_PIN && CPU.bus_state == PASV) {
+        // CPU is reading (MRDC active-low)
+        data_bus_write(CPU.data_bus);
+
+        if ((CPU.bus_state_latched == CODE) && (CPU.prefetching_store)) {
+          // Since client does not cycle the CPU in this state, we have to fetch from 
+          // STORE program ourselves          
+          CPU.data_bus = STORE_PROGRAM[CPU.s_pc++];
+          CPU.data_type = DATA_PROGRAM_END;
+          data_bus_write(CPU.data_bus);
+          #if DEBUG_STORE
+            Serial1.print("STORE: Wrote STORE PGM BYTE to bus (in EXECUTE_DONE): ");
+            Serial1.print(CPU.data_bus, 16);
+            Serial1.print(" new s_pc: ");
+            Serial1.println(CPU.s_pc);
+          #endif
+        }
+        else {
+          Serial1.println("## Invalid condition: ExecuteDone without loading STORE");
+          data_bus_write(CPU.data_bus);
+        }
+      }      
       break;
 
     case Store:
@@ -1069,16 +1291,22 @@ void cycle() {
 
       //set_error("We are in Store");
       
-      if(!READ_MRDC_PIN) {
+      if (!READ_MRDC_PIN && CPU.bus_state == PASV) {
         // CPU is reading
         
-        if(CPU.bus_state == CODE) {
+        if (CPU.bus_state_latched == CODE) {
           // CPU is doing code fetch
-          if(CPU.v_pc < sizeof STORE_PROGRAM) {
+          if(CPU.s_pc < sizeof STORE_PROGRAM) {
             // Read code byte from store program
-            CPU.data_bus = STORE_PROGRAM[CPU.v_pc];
+            CPU.data_bus = STORE_PROGRAM[CPU.s_pc++];
+            #if DEBUG_STORE
+              Serial1.print("STORE: fetching byte: ");
+              Serial1.print(CPU.data_bus, 16);
+              Serial1.print(" new s_pc: ");
+              Serial1.println(CPU.s_pc);
+            #endif
             CPU.data_type = DATA_PROGRAM;
-            CPU.v_pc++;
+
           }
           else {
             CPU.data_bus = 0x90;
@@ -1133,7 +1361,8 @@ void cycle() {
             Serial1.print("## Unadjusted IP: ");
             Serial1.println(CPU.post_regs.ip, HEX);
           #endif            
-          CPU.post_regs.ip -= 0x24;
+          //CPU.post_regs.ip -= 0x24;
+          CPU.post_regs.ip -= (0x24 + 4); // added 4 NOPs to start of STORE program
           
           change_state(StoreDone);
         }
@@ -1194,6 +1423,7 @@ void cycle() {
         print_cpu_state();
       #endif 
       break;
+    case ExecuteDone: // FALLTHROUGH
     case ExecuteFinalize:
       #if TRACE_FINALIZE
         print_cpu_state();
@@ -1205,6 +1435,32 @@ void cycle() {
       #endif
       break;
   }
+
+  // Transition to next T-state.
+  switch(CPU.bus_cycle) {
+    case T1:
+      // Begin a bus cycle only if signalled, otherwise wait in T1
+      if(CPU.bus_state != PASV) {
+        CPU.bus_cycle = T2;
+      }
+      break;
+
+    case T2:
+      CPU.bus_cycle = T3;
+      break;
+
+    case T3:
+      // TODO: Handle wait states between t3 & t4
+      CPU.bus_cycle = T4;
+      break;
+
+    case T4:
+      CPU.bus_cycle = T1;
+      CPU.bus_state_latched = PASV;
+      break;
+  }
+
+
 }
 
 void print_addr(unsigned long addr) {
