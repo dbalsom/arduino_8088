@@ -51,6 +51,8 @@ KiCad project files for the PCB are supplied.
 In theory the board could also support an 8086 CPU. Version 1.1 adds a connection for the 8086's BHE pin, 
 which indicates the size of the current bus transfer.  The cpu_server sketch and protocol still needs modification to support 16 bit data transfers and the longer queue length on the 8086.
 
+Please read all the notes in the next section before ordering/assembling parts. Failure to heed warnings will cause damage to your Arduino.
+
 # BOM
 - A compatible CPU. For best results, use a CMOS CPU such as a Harris 80C88, Oki 80C88, or NEC V20 CPU. Beware of counterfeits on eBay and other online vendors.
 A legitimate chip will not look shiny and new with perfect printing on it.
